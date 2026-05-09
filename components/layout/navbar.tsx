@@ -104,10 +104,7 @@ export default function Navbar() {
               target="_blank"
               rel="noopener noreferrer"
               aria-label="View VibeCheck on GitHub"
-              className="flex items-center gap-1.5 text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white rounded px-1"
-              style={{ color: 'var(--color-text-secondary)' }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--color-text-primary)')}
-              onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--color-text-secondary)')}
+              className="flex items-center gap-1.5 text-sm text-text-secondary hover:text-text-primary transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white rounded px-1"
             >
               <GitHubIcon />
               <span className="hidden sm:inline">GitHub</span>
