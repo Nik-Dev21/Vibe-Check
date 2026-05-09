@@ -10,6 +10,7 @@ import { IamAuthenticator } from 'ibm-cloud-sdk-core'
 import type { ScanReport, ScanStatus } from '../types'
 
 let cloudantClient: CloudantV1 | null = null
+let dbEnsured = false
 
 function getClient(): CloudantV1 {
   if (cloudantClient) return cloudantClient
@@ -34,6 +35,28 @@ function getDbName(): string {
   return db
 }
 
+// ── Database bootstrap ───────────────────────────────────────────────────────
+
+/**
+ * Creates the Cloudant database if it doesn't already exist.
+ * Idempotent — putDatabase with a 412 (already exists) is swallowed.
+ * Called lazily before the first write — cached for the process lifetime.
+ */
+async function ensureDatabase(): Promise<void> {
+  if (dbEnsured) return
+  const client = getClient()
+  const db = getDbName()
+  try {
+    await client.putDatabase({ db })
+    console.log(`[Cloudant] Created database: ${db}`)
+  } catch (err: unknown) {
+    // 412 Precondition Failed = DB already exists — that is fine
+    const status = (err as { status?: number }).status
+    if (status !== 412) throw err
+  }
+  dbEnsured = true
+}
+
 // ── Status documents ──────────────────────────────────────────────────────────
 
 /**
@@ -41,6 +64,7 @@ function getDbName(): string {
  * If a doc already exists, it is updated (rev fetched internally).
  */
 export async function updateScanStatus(status: ScanStatus): Promise<void> {
+  await ensureDatabase()
   const client = getClient()
   const db = getDbName()
 
@@ -69,6 +93,7 @@ export async function updateScanStatus(status: ScanStatus): Promise<void> {
  * Excludes file contents — only metadata and findings.
  */
 export async function saveScanSummary(report: ScanReport): Promise<void> {
+  await ensureDatabase()
   const client = getClient()
   const db = getDbName()
 

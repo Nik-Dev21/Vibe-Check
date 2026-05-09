@@ -5,11 +5,58 @@
  * LOW + CLEAN files stop here (cost control — never sent to watsonx.ai).
  */
 
-import { classifyFile } from '../featherless'
+import { classifyFile, MAX_FILE_CHARS } from '../featherless'
 import type { RepoFile, FastPassResult } from '../types'
 
-// Max concurrent Featherless requests (rate limit safety)
-const CONCURRENCY = 10
+// Max concurrent Featherless requests.
+// Plan limit = 4 units; model costs 2 units/request → max 2 concurrent.
+const CONCURRENCY = 2
+
+/** 300ms breathing room between batches to avoid 429 bursts */
+const BATCH_DELAY_MS = 300
+
+/**
+ * File extensions that are never meaningful for security scanning.
+ * Avoids wasting Featherless quota on lock files, images, fonts, etc.
+ */
+const SKIP_EXTENSIONS = new Set([
+  // Dependency lock files (often huge, no security signal)
+  '.lock', '.sum',
+  // Binary / media
+  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp',
+  '.woff', '.woff2', '.ttf', '.eot', '.otf',
+  '.mp4', '.mp3', '.wav', '.pdf',
+  '.zip', '.tar', '.gz', '.7z',
+  // Generated / minified
+  '.min.js', '.min.css', '.map',
+])
+
+const SKIP_FILENAMES = new Set([
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'bun.lock',
+  'bun.lockb',
+  'Gemfile.lock',
+  'Cargo.lock',
+  'composer.lock',
+  'poetry.lock',
+  'go.sum',
+  'Pipfile.lock',
+])
+
+function shouldSkipFile(file: RepoFile): boolean {
+  const name = file.path.split('/').pop() ?? file.path
+  if (SKIP_FILENAMES.has(name)) return true
+  const ext = name.includes('.') ? '.' + name.split('.').pop()!.toLowerCase() : ''
+  if (SKIP_EXTENSIONS.has(ext)) return true
+  // Skip files larger than Featherless context window
+  if (file.content.length > MAX_FILE_CHARS) {
+    console.warn(`[fast-pass] Skipping ${file.path} — ${file.content.length} chars exceeds context limit`)
+    return true
+  }
+  return false
+}
 
 /**
  * Run all files through the Featherless fast-pass classifier.
@@ -18,8 +65,15 @@ const CONCURRENCY = 10
 export async function runFastPass(files: RepoFile[]): Promise<FastPassResult[]> {
   const results: FastPassResult[] = []
 
-  for (let i = 0; i < files.length; i += CONCURRENCY) {
-    const batch = files.slice(i, i + CONCURRENCY)
+  // Pre-filter — never send lock files, binaries, or oversized files
+  const scannable = files.filter((f) => !shouldSkipFile(f))
+  const skipped = files.length - scannable.length
+  if (skipped > 0) {
+    console.log(`[fast-pass] Skipping ${skipped} non-scannable files, scanning ${scannable.length}`)
+  }
+
+  for (let i = 0; i < scannable.length; i += CONCURRENCY) {
+    const batch = scannable.slice(i, i + CONCURRENCY)
 
     const settled = await Promise.allSettled(
       batch.map((file) =>
@@ -45,6 +99,11 @@ export async function runFastPass(files: RepoFile[]): Promise<FastPassResult[]> 
           confidence: 0,
         })
       }
+    }
+
+    // Breathing room between batches
+    if (i + CONCURRENCY < scannable.length) {
+      await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS))
     }
   }
 

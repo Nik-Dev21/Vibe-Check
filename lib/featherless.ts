@@ -9,25 +9,39 @@ import OpenAI from 'openai'
 import { z } from 'zod'
 import type { FastPassResult, VulnCategory } from './types'
 
+// ── Constants ───────────────────────────────────────────────────────────────────────
+
+/** Featherless plan allows 48k tokens; ~3.5 chars/token → truncate at 40k chars */
+export const MAX_FILE_CHARS = 40_000
+
+export const VALID_CATEGORIES: VulnCategory[] = [
+  'HARDCODED_SECRET',
+  'SQL_INJECTION',
+  'XSS',
+  'BROKEN_AUTH',
+  'INSECURE_DEPENDENCY',
+  'SENSITIVE_DATA_EXPOSURE',
+  'SECURITY_MISCONFIGURATION',
+  'IDOR',
+  'SSRF',
+  'PATH_TRAVERSAL',
+]
+
 // ── Zod schema for Featherless fast-pass response ────────────────────────────
 
+// detectedTypes accepts any string and filters to known categories at transform time.
+// This prevents hard schema failures when the LLM returns a slightly different label.
 const FastPassResponseSchema = z.object({
-  riskLevel: z.enum(['HIGH', 'MEDIUM', 'LOW', 'CLEAN']),
-  detectedTypes: z.array(
-    z.enum([
-      'HARDCODED_SECRET',
-      'SQL_INJECTION',
-      'XSS',
-      'BROKEN_AUTH',
-      'INSECURE_DEPENDENCY',
-      'SENSITIVE_DATA_EXPOSURE',
-      'SECURITY_MISCONFIGURATION',
-      'IDOR',
-      'SSRF',
-      'PATH_TRAVERSAL',
-    ])
-  ),
-  confidence: z.number().min(0).max(1),
+  riskLevel: z.enum(['HIGH', 'MEDIUM', 'LOW', 'CLEAN']).catch('LOW'),
+  detectedTypes: z
+    .array(z.string())
+    .transform((arr) =>
+      arr.filter((v): v is VulnCategory =>
+        VALID_CATEGORIES.includes(v as VulnCategory)
+      )
+    )
+    .catch([]),
+  confidence: z.number().min(0).max(1).catch(0.5),
   topIssue: z.string().nullable().optional(),
 })
 
@@ -66,20 +80,26 @@ export async function classifyFile(
   const client = getClient()
   const model = getModel()
 
+  const truncated = fileContent.slice(0, MAX_FILE_CHARS)
+
   const prompt = `You are a security code scanner. Analyze the following code file and classify it.
 
 File: ${filePath}
 Language: ${language}
 Content:
-${fileContent}
+${truncated}
 
-Respond ONLY with valid JSON in this exact format, no other text:
+Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
 {
-  "riskLevel": "HIGH|MEDIUM|LOW|CLEAN",
-  "detectedTypes": ["HARDCODED_SECRET", "SQL_INJECTION", ...],
-  "confidence": 0.0-1.0,
-  "topIssue": "one sentence summary or null"
-}`
+  "riskLevel": "HIGH" | "MEDIUM" | "LOW" | "CLEAN",
+  "detectedTypes": [<zero or more from the list below>],
+  "confidence": <number 0.0 to 1.0>,
+  "topIssue": "<one-sentence summary>" | null
+}
+
+valid detectedTypes values (use ONLY these exact strings):
+HARDCODED_SECRET, SQL_INJECTION, XSS, BROKEN_AUTH, INSECURE_DEPENDENCY,
+SENSITIVE_DATA_EXPOSURE, SECURITY_MISCONFIGURATION, IDOR, SSRF, PATH_TRAVERSAL`
 
   const completion = await client.chat.completions.create({
     model,
@@ -108,7 +128,10 @@ Respond ONLY with valid JSON in this exact format, no other text:
 
   const result = FastPassResponseSchema.safeParse(parsed)
   if (!result.success) {
-    console.warn(`[Featherless] Schema validation failed for ${filePath}: ${result.error.message}`)
+    console.warn(
+      `[Featherless] Schema validation failed for ${filePath}:`,
+      JSON.stringify(result.error.issues, null, 2)
+    )
     return { filePath, riskLevel: 'LOW', detectedTypes: [], confidence: 0 }
   }
 
