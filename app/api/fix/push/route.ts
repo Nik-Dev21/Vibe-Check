@@ -5,7 +5,8 @@
  */
 
 import { z } from 'zod'
-import { getFileContent, openPR } from '@/lib/github'
+import { auth } from '@/lib/auth'
+import { getFileContent, openPR, type PRVulnMeta } from '@/lib/github'
 import type { FixPushResponse } from '@/lib/types'
 
 export const maxDuration = 60
@@ -13,8 +14,15 @@ export const maxDuration = 60
 const FixPushRequestSchema = z.object({
   repoUrl: z.string().url('repoUrl must be a valid URL'),
   filePath: z.string().min(1, 'filePath is required'),
+  originalCode: z.string().min(1, 'originalCode is required'),
   fixedCode: z.string().min(1, 'fixedCode is required'),
   vulnerabilityId: z.string().min(1, 'vulnerabilityId is required'),
+  // Optional vulnerability metadata for rich PR body
+  vulnTitle: z.string().optional(),
+  vulnSeverity: z.string().optional(),
+  vulnDescription: z.string().optional(),
+  vulnLineNumber: z.number().optional(),
+  fixExplanation: z.string().optional(),
 })
 
 export async function POST(request: Request): Promise<Response> {
@@ -33,33 +41,39 @@ export async function POST(request: Request): Promise<Response> {
     )
   }
 
-  const { repoUrl, filePath, fixedCode, vulnerabilityId } = parsed.data
+  const { repoUrl, filePath, originalCode, fixedCode, vulnerabilityId } = parsed.data
+
+  // Use the authenticated user's GitHub token for PR creation
+  const session = await auth()
+  const githubToken = session?.accessToken
 
   try {
     // Fetch the full current file to apply the fix in context
-    const currentContent = await getFileContent(repoUrl, filePath)
+    const currentContent = await getFileContent(repoUrl, filePath, githubToken)
 
-    // The fixedCode replaces the snippet within the full file.
-    // The auto-fix prompt guarantees fixedCode is a drop-in replacement for the
-    // original snippet — we need the original to do the replacement correctly.
-    // Since we only have fixedCode here (not the original snippet), we use it
-    // directly as the new file content if it's a full file, or ask the caller
-    // to send the full file content.
-    //
-    // Safe assumption: if fixedCode is longer than 10 lines it's a full file,
-    // otherwise it's a snippet — in which case we can't safely replace without
-    // the original. For now, pass fixedCode as the full new file content.
-    // The fix panel in Stream B always sends the full patched file.
-    const newContent =
-      fixedCode.split('\n').length > 10
-        ? fixedCode          // caller sent the full patched file
-        : currentContent.replace(
-            // Attempt best-effort snippet replacement (not guaranteed for multi-line)
-            fixedCode,
-            fixedCode
-          )
+    // Replace the original vulnerable snippet with the fixed code
+    if (!currentContent.includes(originalCode)) {
+      return Response.json(
+        { error: 'Original code snippet not found in the current file — the file may have changed since the scan.' },
+        { status: 409 }
+      )
+    }
 
-    const prUrl = await openPR(repoUrl, filePath, newContent, vulnerabilityId)
+    const newContent = currentContent.replace(originalCode, fixedCode)
+
+    // Build vulnerability metadata for rich PR body
+    const vulnMeta: PRVulnMeta | undefined =
+      parsed.data.vulnTitle
+        ? {
+            title: parsed.data.vulnTitle,
+            severity: parsed.data.vulnSeverity ?? 'UNKNOWN',
+            description: parsed.data.vulnDescription ?? '',
+            lineNumber: parsed.data.vulnLineNumber,
+            explanation: parsed.data.fixExplanation ?? '',
+          }
+        : undefined
+
+    const prUrl = await openPR(repoUrl, filePath, newContent, vulnerabilityId, githubToken, vulnMeta)
 
     const responseBody: FixPushResponse = { prUrl }
     return Response.json(responseBody)

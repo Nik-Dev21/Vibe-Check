@@ -1,10 +1,13 @@
+'use client'
+
 /**
  * components/layout/navbar.tsx
- * Fixed top navbar — VibeCheck wordmark + GitHub link.
- * Server Component (no interactivity needed).
+ * Fixed top navbar — VibeCheck wordmark + auth state + GitHub link.
  */
 
 import Link from 'next/link'
+import { useSession, signOut } from 'next-auth/react'
+import ConnectGitHubButton from '@/components/auth/connect-github-button'
 
 function ShieldIcon() {
   return (
@@ -49,9 +52,12 @@ function GitHubIcon() {
 }
 
 export default function Navbar() {
+  const { data: session, status } = useSession()
+  const isLoading = status === 'loading'
+
   return (
     <>
-      {/* Skip to content — accessibility */}
+      {/* Skip to content */}
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-white focus:text-black focus:rounded focus:font-semibold focus-visible:ring-2 focus-visible:ring-white"
@@ -73,16 +79,13 @@ export default function Navbar() {
             className="flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white rounded"
             aria-label="VibeCheck — home"
           >
-            <span
-              className="text-white"
-              style={{ color: 'var(--color-text-primary)' }}
-            >
+            <span style={{ color: 'var(--color-text-primary)' }}>
               <ShieldIcon />
             </span>
             <span
               translate="no"
               className="text-base font-bold tracking-tight"
-              style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)' }}
+              style={{ color: 'var(--color-text-primary)' }}
             >
               VibeCheck
             </span>
@@ -99,21 +102,59 @@ export default function Navbar() {
             >
               beta
             </span>
+
             <a
               href="https://github.com/Nik-Dev21/Vibe-Check"
               target="_blank"
               rel="noopener noreferrer"
               aria-label="View VibeCheck on GitHub"
-              className="flex items-center gap-1.5 text-sm text-text-secondary hover:text-text-primary transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white rounded px-1"
+              className="flex items-center gap-1.5 text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white rounded px-1"
+              style={{ color: 'var(--color-text-secondary)' }}
             >
               <GitHubIcon />
               <span className="hidden sm:inline">GitHub</span>
             </a>
+
+            {/* Auth state */}
+            {!isLoading && (
+              session ? (
+                <div className="flex items-center gap-3">
+                  {session.user.image && (
+                    <img
+                      src={session.user.image}
+                      alt=""
+                      width={28}
+                      height={28}
+                      className="rounded-full"
+                    />
+                  )}
+                  <span
+                    className="hidden sm:block text-xs font-mono"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                  >
+                    {session.user.login ?? session.user.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => signOut()}
+                    className="rounded border px-3 py-1 text-xs font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                    style={{
+                      borderColor: 'var(--color-border-subtle)',
+                      color: 'var(--color-text-secondary)',
+                    }}
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              ) : (
+                <ConnectGitHubButton />
+              )
+            )}
           </div>
         </nav>
       </header>
 
-      {/* Spacer to push content below fixed navbar */}
+      {/* Spacer */}
       <div className="h-14" aria-hidden="true" />
     </>
   )

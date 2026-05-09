@@ -11,11 +11,54 @@ interface ReportHeaderProps {
 }
 
 function scoreColor(score: number): string {
-  if (score >= 80) return 'var(--color-clean)'
-  if (score >= 60) return 'var(--color-low)'
-  if (score >= 40) return 'var(--color-medium)'
-  if (score >= 20) return 'var(--color-high)'
-  return 'var(--color-critical)'
+  if (score >= 90) return 'var(--color-clean)'   // 90–100: green
+  if (score >= 70) return 'var(--color-low)'      // 70–89: blue
+  if (score >= 40) return 'var(--color-medium)'   // 40–69: amber
+  return 'var(--color-critical)'                  // 0–39: red
+}
+
+/** SVG circular progress ring around the score number */
+function ScoreRing({ score, color }: { score: number; color: string }) {
+  const radius = 58
+  const circumference = 2 * Math.PI * radius
+  const offset = circumference - (score / 100) * circumference
+
+  return (
+    <svg
+      width="140"
+      height="140"
+      viewBox="0 0 140 140"
+      className="absolute inset-0"
+      aria-hidden="true"
+    >
+      {/* Background ring */}
+      <circle
+        cx="70"
+        cy="70"
+        r={radius}
+        fill="none"
+        stroke="#222222"
+        strokeWidth="6"
+      />
+      {/* Progress ring */}
+      <circle
+        cx="70"
+        cy="70"
+        r={radius}
+        fill="none"
+        stroke={color}
+        strokeWidth="6"
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        style={{
+          transform: 'rotate(-90deg)',
+          transformOrigin: '50% 50%',
+          transition: 'stroke-dashoffset 0.6s ease-out',
+        }}
+      />
+    </svg>
+  )
 }
 
 interface SeverityPillProps {
@@ -78,24 +121,62 @@ export default function ReportHeader({ report }: ReportHeaderProps) {
     >
       {/* Score + repo row */}
       <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
-        {/* Score block */}
-        <div className="flex flex-col gap-1">
-          <span
-            className="text-8xl font-bold leading-none tabular-nums"
-            style={{
-              color: scoreColor(securityScore),
-              fontVariantNumeric: 'tabular-nums',
-            }}
+        {/* Score block with circular ring */}
+        <div className="flex flex-col items-center gap-2 sm:items-start">
+          <div
+            className="relative flex h-[140px] w-[140px] items-center justify-center"
             aria-label={`Security score: ${securityScore} out of 100`}
           >
-            {securityScore}
-          </span>
+            <ScoreRing score={securityScore} color={scoreColor(securityScore)} />
+            <span
+              className="text-5xl font-bold tabular-nums"
+              style={{
+                color: scoreColor(securityScore),
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {securityScore}
+            </span>
+          </div>
           <span
             className="text-xs uppercase tracking-widest"
             style={{ color: 'var(--color-text-tertiary)' }}
           >
             Security Score
           </span>
+          {/* Issue context below the score */}
+          {summary.critical > 0 && (
+            <span
+              className="text-xs font-semibold"
+              style={{ color: 'var(--color-critical)' }}
+            >
+              {summary.critical} critical issue{summary.critical !== 1 ? 's' : ''} found
+            </span>
+          )}
+          {summary.critical === 0 && summary.high > 0 && (
+            <span
+              className="text-xs font-semibold"
+              style={{ color: 'var(--color-high)' }}
+            >
+              {summary.high} high severity issue{summary.high !== 1 ? 's' : ''} found
+            </span>
+          )}
+          {summary.critical === 0 && summary.high === 0 && (summary.medium > 0 || summary.low > 0) && (
+            <span
+              className="text-xs font-semibold"
+              style={{ color: 'var(--color-medium)' }}
+            >
+              {summary.medium + summary.low} issue{summary.medium + summary.low !== 1 ? 's' : ''} found
+            </span>
+          )}
+          {summary.critical === 0 && summary.high === 0 && summary.medium === 0 && summary.low === 0 && (
+            <span
+              className="text-xs font-semibold"
+              style={{ color: 'var(--color-clean)' }}
+            >
+              No issues found
+            </span>
+          )}
         </div>
 
         {/* Repo + meta block */}

@@ -25,7 +25,8 @@ import type { ScanReport, ScanStatus } from '../types'
  */
 export async function runScanPipeline(
   repoUrl: string,
-  scanId: string
+  scanId: string,
+  githubToken?: string
 ): Promise<ScanReport> {
   const startedAt = Date.now()
 
@@ -50,7 +51,7 @@ export async function runScanPipeline(
 
   // ── Phase 1: Fetch repo files ───────────────────────────────────────────────
   await setStatus('fetching', 5)
-  const files = await getRepoFiles(repoUrl)
+  const files = await getRepoFiles(repoUrl, githubToken)
 
   if (files.length === 0) {
     throw new Error(`No scannable files found in ${repoUrl}`)

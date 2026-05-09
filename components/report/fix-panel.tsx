@@ -6,8 +6,10 @@
  * States: idle → generating → generated → pushing → pushed
  */
 
-import { useState } from 'react'
+import { useState, lazy, Suspense } from 'react'
 import type { Vulnerability, FixResponse, FixPushResponse } from '@/lib/types'
+
+const ReactDiffViewer = lazy(() => import('react-diff-viewer-continued'))
 
 interface FixPanelProps {
   vulnerability: Vulnerability
@@ -58,53 +60,58 @@ function ExternalLinkIcon() {
   )
 }
 
-/** Simple two-column diff viewer (before / after) */
-function DiffViewer({ original, fixed }: { original: string; fixed: string }) {
-  return (
-    <div className="grid grid-cols-2 gap-2 overflow-hidden rounded" style={{ fontSize: '11px' }}>
-      {/* Before */}
-      <div>
-        <p
-          className="mb-1 px-1 text-xs font-mono font-semibold uppercase tracking-widest"
-          style={{ color: 'var(--color-critical)' }}
-        >
-          Before
-        </p>
-        <pre
-          className="overflow-x-auto rounded p-3 leading-relaxed"
-          style={{
-            backgroundColor: 'color-mix(in srgb, var(--color-critical) 6%, var(--color-bg-tertiary))',
-            border: '1px solid color-mix(in srgb, var(--color-critical) 20%, transparent)',
-            color: 'var(--color-text-primary)',
-            fontFamily: 'var(--font-mono)',
-            overscrollBehavior: 'contain',
-          }}
-        >
-          <code>{original}</code>
-        </pre>
-      </div>
+/** Dark theme for react-diff-viewer-continued */
+const diffStyles = {
+  variables: {
+    dark: {
+      diffViewerBackground: '#0a0a0a',
+      diffViewerColor: '#ffffff',
+      addedBackground: 'rgba(48, 209, 88, 0.1)',
+      addedColor: '#ffffff',
+      removedBackground: 'rgba(255, 59, 48, 0.1)',
+      removedColor: '#ffffff',
+      wordAddedBackground: 'rgba(48, 209, 88, 0.25)',
+      wordRemovedBackground: 'rgba(255, 59, 48, 0.25)',
+      addedGutterBackground: 'rgba(48, 209, 88, 0.15)',
+      removedGutterBackground: 'rgba(255, 59, 48, 0.15)',
+      gutterBackground: '#111111',
+      gutterBackgroundDark: '#0a0a0a',
+      highlightBackground: 'rgba(255, 255, 255, 0.05)',
+      highlightGutterBackground: 'rgba(255, 255, 255, 0.05)',
+      codeFoldGutterBackground: '#111111',
+      codeFoldBackground: '#111111',
+      emptyLineBackground: '#0a0a0a',
+      gutterColor: '#666666',
+      addedGutterColor: '#30d158',
+      removedGutterColor: '#ff3b30',
+      codeFoldContentColor: '#666666',
+      diffViewerTitleBackground: '#111111',
+      diffViewerTitleColor: '#999999',
+      diffViewerTitleBorderColor: '#222222',
+    },
+  },
+}
 
-      {/* After */}
-      <div>
-        <p
-          className="mb-1 px-1 text-xs font-mono font-semibold uppercase tracking-widest"
-          style={{ color: 'var(--color-clean)' }}
-        >
-          After
-        </p>
-        <pre
-          className="overflow-x-auto rounded p-3 leading-relaxed"
-          style={{
-            backgroundColor: 'color-mix(in srgb, var(--color-clean) 6%, var(--color-bg-tertiary))',
-            border: '1px solid color-mix(in srgb, var(--color-clean) 20%, transparent)',
-            color: 'var(--color-text-primary)',
-            fontFamily: 'var(--font-mono)',
-            overscrollBehavior: 'contain',
-          }}
-        >
-          <code>{fixed}</code>
-        </pre>
-      </div>
+function DiffPanel({ original, fixed }: { original: string; fixed: string }) {
+  return (
+    <div className="overflow-hidden rounded border" style={{ borderColor: '#222222' }}>
+      <Suspense
+        fallback={
+          <div className="p-4 text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+            Loading diff viewer…
+          </div>
+        }
+      >
+        <ReactDiffViewer
+          oldValue={original}
+          newValue={fixed}
+          splitView={true}
+          useDarkTheme={true}
+          leftTitle="Original (vulnerable)"
+          rightTitle="Fixed"
+          styles={diffStyles}
+        />
+      </Suspense>
     </div>
   )
 }
@@ -162,8 +169,14 @@ export default function FixPanel({ vulnerability, repoUrl, onClose }: FixPanelPr
         body: JSON.stringify({
           repoUrl,
           filePath: vulnerability.filePath,
+          originalCode: fix.original,
           fixedCode: fix.fixed,
           vulnerabilityId: vulnerability.id,
+          vulnTitle: vulnerability.title,
+          vulnSeverity: vulnerability.severity,
+          vulnDescription: vulnerability.description,
+          vulnLineNumber: vulnerability.lineNumber,
+          fixExplanation: fix.explanation,
         }),
       })
 
@@ -239,7 +252,7 @@ export default function FixPanel({ vulnerability, repoUrl, onClose }: FixPanelPr
         {/* Diff viewer */}
         {fix && (
           <>
-            <DiffViewer original={fix.original} fixed={fix.fixed} />
+            <DiffPanel original={fix.original} fixed={fix.fixed} />
 
             {/* Explanation */}
             <div
@@ -258,16 +271,24 @@ export default function FixPanel({ vulnerability, repoUrl, onClose }: FixPanelPr
           </>
         )}
 
-        {/* Inline error */}
+        {/* Inline error + retry */}
         {error && (
-          <p
-            className="mt-3 text-xs"
-            role="alert"
-            aria-live="polite"
-            style={{ color: 'var(--color-critical)' }}
-          >
-            {error}
-          </p>
+          <div className="mt-3 flex items-center gap-3" role="alert" aria-live="polite">
+            <p className="text-xs" style={{ color: 'var(--color-critical)' }}>
+              {error}
+            </p>
+            <button
+              type="button"
+              onClick={handleGenerateFix}
+              className="shrink-0 rounded border px-3 py-1 text-xs font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              style={{
+                borderColor: '#333333',
+                color: 'var(--color-text-secondary)',
+              }}
+            >
+              Try Again
+            </button>
+          </div>
         )}
 
         {/* PR link (after push) */}

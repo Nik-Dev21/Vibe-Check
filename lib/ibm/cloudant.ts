@@ -5,8 +5,7 @@
  * Stores lightweight scan summaries and scan status docs.
  */
 
-import { CloudantV1 } from '@ibm-cloud/cloudant'
-import { IamAuthenticator } from 'ibm-cloud-sdk-core'
+import { CloudantV1, IamAuthenticator } from '@ibm-cloud/cloudant'
 import type { ScanReport, ScanStatus } from '../types'
 
 let cloudantClient: CloudantV1 | null = null

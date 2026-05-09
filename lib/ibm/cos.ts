@@ -5,7 +5,7 @@
  * Stores full ScanReport JSON as {scanId}.json
  */
 
-import S3 from 'ibm-cos-sdk'
+import * as S3 from 'ibm-cos-sdk'
 import type { ScanReport } from '../types'
 
 let cosClient: S3.S3 | null = null

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Poppins, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
+import SessionProvider from "@/components/auth/session-provider";
 
 const poppins = Poppins({
   weight: ["400", "600", "700"],
@@ -35,7 +36,7 @@ export default function RootLayout({
         )}
         suppressHydrationWarning
       >
-        {children}
+        <SessionProvider>{children}</SessionProvider>
       </body>
     </html>
   );

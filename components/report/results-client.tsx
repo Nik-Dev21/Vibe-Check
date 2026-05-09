@@ -7,14 +7,13 @@
  */
 
 import { useState } from 'react'
-import type { Vulnerability, ScanReport } from '@/lib/types'
+import type { Vulnerability } from '@/lib/types'
 import VulnerabilityList from '@/components/report/vulnerability-list'
 import FixPanel from '@/components/report/fix-panel'
 
 interface ResultsClientProps {
   vulnerabilities: Vulnerability[]
   repoUrl: string
-  report: ScanReport
 }
 
 export default function ResultsClient({ vulnerabilities, repoUrl }: ResultsClientProps) {

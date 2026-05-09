@@ -24,9 +24,9 @@ interface BuildReportParams {
  *
  * Deduction table:
  *   CRITICAL: −25 each (cap at 75)
- *   HIGH:     −15 each (cap at 45)
+ *   HIGH:     −10 each (cap at 40)
  *   MEDIUM:   −5  each (cap at 20)
- *   LOW:      −1  each (cap at 5)
+ *   LOW:      −2  each (cap at 10)
  */
 function calculateSecurityScore(vulnerabilities: Vulnerability[]): number {
   const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 }
@@ -36,9 +36,9 @@ function calculateSecurityScore(vulnerabilities: Vulnerability[]): number {
 
   const deductions =
     Math.min(counts.CRITICAL * 25, 75) +
-    Math.min(counts.HIGH * 15, 45) +
+    Math.min(counts.HIGH * 10, 40) +
     Math.min(counts.MEDIUM * 5, 20) +
-    Math.min(counts.LOW * 1, 5)
+    Math.min(counts.LOW * 2, 10)
 
   return Math.max(0, Math.min(100, 100 - deductions))
 }

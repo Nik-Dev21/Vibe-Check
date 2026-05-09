@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod'
+import { auth } from '@/lib/auth'
 import { runScanPipeline, generateScanId } from '@/lib/scanner/index'
 import { saveReport } from '@/lib/ibm/cos'
 import { saveScanSummary, updateScanStatus } from '@/lib/ibm/cloudant'
@@ -42,6 +43,10 @@ export async function POST(request: Request): Promise<Response> {
   const { repoUrl } = parsed.data
   const scanId = generateScanId()
 
+  // Use the authenticated user's GitHub token if available (for private repos)
+  const session = await auth()
+  const githubToken = session?.accessToken
+
   // ── Write initial status to Cloudant (scan is starting) ───────────────────
   try {
     await updateScanStatus({
@@ -59,7 +64,7 @@ export async function POST(request: Request): Promise<Response> {
 
   // ── Run the full scan pipeline ─────────────────────────────────────────────
   try {
-    const report = await runScanPipeline(repoUrl, scanId)
+    const report = await runScanPipeline(repoUrl, scanId, githubToken)
 
     // Persist full report to COS
     const reportKey = await saveReport(scanId, report)

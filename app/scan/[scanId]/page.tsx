@@ -6,21 +6,39 @@
  */
 
 import type { Metadata } from 'next'
+import { redirect } from 'next/navigation'
+import { auth } from '@/lib/auth'
 import { MOCK_SCAN_REPORT } from '@/lib/mock-data'
+import type { ScanReport } from '@/lib/types'
 import Navbar from '@/components/layout/navbar'
 import Footer from '@/components/layout/footer'
 import ReportHeader from '@/components/report/report-header'
 import FileTree from '@/components/report/file-tree'
 import ResultsClient from '@/components/report/results-client'
+import BulkFixButton from '@/components/report/bulk-fix-button'
 
 interface ScanResultPageProps {
   params: Promise<{ scanId: string }>
 }
 
+async function fetchReport(scanId: string): Promise<ScanReport> {
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
+  try {
+    const res = await fetch(`${baseUrl}/api/scan/${scanId}`, { cache: 'no-store' })
+    if (res.ok) {
+      const data = await res.json()
+      // If it has securityScore, it's a complete report
+      if ('securityScore' in data) return data as ScanReport
+    }
+  } catch {
+    // API not available — fall back to mock
+  }
+  return MOCK_SCAN_REPORT
+}
+
 export async function generateMetadata({ params }: ScanResultPageProps): Promise<Metadata> {
   const { scanId } = await params
-  // When Stream A is ready: fetch real report to get repoName
-  const report = MOCK_SCAN_REPORT
+  const report = await fetchReport(scanId)
   return {
     title: `VibeCheck — ${report.repoName} (${scanId})`,
     description: `Security scan results for ${report.repoUrl}. Score: ${report.securityScore}/100.`,
@@ -28,17 +46,11 @@ export async function generateMetadata({ params }: ScanResultPageProps): Promise
 }
 
 export default async function ScanResultPage({ params }: ScanResultPageProps) {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { scanId } = await params
+  const session = await auth()
+  if (!session) redirect('/')
 
-  // ── Stream A swap (one line) ────────────────────────────────────────────────
-  // When Stream A API is ready, replace this line:
-  //   const report = MOCK_SCAN_REPORT
-  // With:
-  //   const res = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/scan/${scanId}`, { cache: 'no-store' })
-  //   const report = await res.json() as ScanReport
-  // ────────────────────────────────────────────────────────────────────────────
-  const report = MOCK_SCAN_REPORT
+  const { scanId } = await params
+  const report = await fetchReport(scanId)
 
   return (
     <div
@@ -52,8 +64,16 @@ export default async function ScanResultPage({ params }: ScanResultPageProps) {
         className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6 lg:px-8"
       >
         {/* Report header — full width */}
-        <div className="mb-8">
+        <div className="mb-4">
           <ReportHeader report={report} />
+        </div>
+
+        {/* Bulk fix button — below header */}
+        <div className="mb-8">
+          <BulkFixButton
+            vulnerabilities={report.vulnerabilities}
+            repoUrl={report.repoUrl}
+          />
         </div>
 
         {/* Two-column layout */}
@@ -74,7 +94,6 @@ export default async function ScanResultPage({ params }: ScanResultPageProps) {
             <ResultsClient
               vulnerabilities={report.vulnerabilities}
               repoUrl={report.repoUrl}
-              report={report}
             />
           </div>
         </div>

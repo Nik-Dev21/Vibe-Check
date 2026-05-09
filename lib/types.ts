@@ -86,5 +86,5 @@ export interface ScanRequest { repoUrl: string }
 export interface ScanResponse { scanId: string; status: 'queued' }
 export interface FixRequest { vulnerabilityId: string; filePath: string; codeSnippet: string }
 export interface FixResponse { original: string; fixed: string; explanation: string }
-export interface FixPushRequest { repoUrl: string; filePath: string; fixedCode: string; vulnerabilityId: string }
+export interface FixPushRequest { repoUrl: string; filePath: string; originalCode: string; fixedCode: string; vulnerabilityId: string }
 export interface FixPushResponse { prUrl: string }
