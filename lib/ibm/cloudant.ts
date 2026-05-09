@@ -32,7 +32,7 @@ function getClient(): CloudantV1 {
 function getDbName(): string {
   const db = process.env.IBM_CLOUDANT_DB_NAME
   if (!db) throw new Error('[Cloudant] IBM_CLOUDANT_DB_NAME is not set')
-  return db
+  return db.toLowerCase()
 }
 
 // ── Database bootstrap ───────────────────────────────────────────────────────
