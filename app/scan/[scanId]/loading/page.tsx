@@ -448,16 +448,14 @@ export default function ScanLoadingPage() {
     }
   }, [scanDone, scanId, router])
 
-  // Poll real scan status
+  // Poll real scan status — uses lightweight endpoint (no COS fetch)
   const poll = useCallback(async () => {
     try {
       const res = await fetch(`/api/scan/${scanId}`, { cache: 'no-store' })
       if (!res.ok) return
-      const data = (await res.json()) as ScanStatus | { securityScore: number }
-      if ('securityScore' in data) { setScanDone(true); return }
-      const status = data as ScanStatus
-      if (status.status === 'complete') { setScanDone(true); return }
-      if (status.status === 'error') { setScanError(status.error ?? 'Scan failed — please try again.') }
+      const data = (await res.json()) as ScanStatus | { status: string }
+      if (data.status === 'complete') { setScanDone(true); return }
+      if (data.status === 'error') { setScanError((data as ScanStatus).error ?? 'Scan failed — please try again.') }
     } catch { /* swallow — keep polling */ }
   }, [scanId])
 

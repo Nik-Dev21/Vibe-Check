@@ -8,18 +8,8 @@ import { getScan } from '@/lib/ibm/cloudant'
 import { getReport } from '@/lib/ibm/cos'
 import type { ScanStatus } from '@/lib/types'
 
-function isScanStatus(doc: unknown): doc is ScanStatus {
-  return (
-    typeof doc === 'object' &&
-    doc !== null &&
-    'status' in doc &&
-    ((doc as ScanStatus).status === 'scanning' ||
-      (doc as ScanStatus).status === 'error')
-  )
-}
-
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ scanId: string }> }
 ): Promise<Response> {
   const { scanId } = await params
@@ -28,6 +18,9 @@ export async function GET(
     return Response.json({ error: 'scanId is required' }, { status: 400 })
   }
 
+  const url = new URL(req.url)
+  const full = url.searchParams.get('full') === '1'
+
   try {
     const doc = await getScan(scanId)
 
@@ -35,21 +28,20 @@ export async function GET(
       return Response.json({ error: 'Scan not found' }, { status: 404 })
     }
 
-    // If the scan is still in progress or errored, return the ScanStatus doc
-    if (isScanStatus(doc)) {
+    // Status doc (scanning/error) — return as-is so poller can track progress
+    if ('status' in doc && (doc as ScanStatus).status !== 'complete') {
       return Response.json(doc)
     }
 
-    // Scan is complete — check COS for the full report first
-    // (Cloudant stores the summary; COS has the full vulnerabilities list)
-    const fullReport = await getReport(scanId)
-
-    if (fullReport) {
-      return Response.json(fullReport)
+    // Scan complete — unless ?full=1 is requested, return a lightweight status
+    // so the loading page redirect happens immediately without waiting for COS.
+    if (!full) {
+      return Response.json({ status: 'complete', scanId })
     }
 
-    // COS report not found — fall back to the Cloudant summary
-    return Response.json(doc)
+    // Full report requested (results page) — fetch from COS then fall back to Cloudant
+    const fullReport = await getReport(scanId)
+    return Response.json(fullReport ?? doc)
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
