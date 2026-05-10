@@ -67,7 +67,12 @@ export default function Navbar() {
 
       <header
         className="fixed top-0 left-0 right-0 z-40 border-b"
-        style={{ borderColor: 'var(--color-border-subtle)', backgroundColor: 'var(--color-bg-primary)' }}
+        style={{
+          borderColor: 'var(--color-border-subtle)',
+          backgroundColor: 'rgba(0,0,0,0.55)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+        }}
       >
         <nav
           className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8"

@@ -28,14 +28,23 @@ export default function Footer() {
           {' '}— Your vibe-coded app has vulnerabilities. We found them.
         </p>
 
-        {/* Powered-by attributions */}
+        {/* Status + powered-by */}
         <div
           className="flex items-center gap-4 text-xs"
-          style={{ color: 'var(--color-text-tertiary)' }}
+          style={{ color: 'var(--color-text-tertiary)', fontFamily: 'monospace' }}
         >
-          <span translate="no">IBM&nbsp;Granite</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%',
+              background: 'var(--color-clean)',
+              boxShadow: '0 0 6px var(--color-clean)',
+              animation: 'pulse-soft 1.4s ease-in-out infinite',
+              display: 'inline-block',
+            }} />
+            all systems normal
+          </span>
           <span aria-hidden="true">&middot;</span>
-          <span translate="no">Watson&nbsp;NLU</span>
+          <span translate="no">IBM&nbsp;Granite</span>
           <span aria-hidden="true">&middot;</span>
           <span translate="no">Featherless&nbsp;AI</span>
         </div>
