@@ -47,7 +47,7 @@ export async function POST(request: Request): Promise<Response> {
   const session = await auth()
   const githubToken = session?.accessToken
 
-  // ── Write initial status to Cloudant (scan is starting) ───────────────────
+  // ── Write initial status so /loading can poll immediately ────────────────
   try {
     await updateScanStatus({
       scanId,
@@ -56,53 +56,56 @@ export async function POST(request: Request): Promise<Response> {
       progress: 0,
     })
   } catch (err) {
-    // Non-fatal — proceed with scan even if Cloudant is temporarily unavailable
     console.warn(`[POST /api/scan] Initial status write failed: ${
       err instanceof Error ? err.message : String(err)
     }`)
   }
 
-  // ── Run the full scan pipeline ─────────────────────────────────────────────
-  try {
-    const report = await runScanPipeline(repoUrl, scanId, githubToken)
+  // ── Respond immediately so the client can navigate to /loading ────────────
+  // Pipeline runs in the background — Vercel waitUntil keeps the function alive.
+  const responseBody: ScanResponse = { scanId, status: 'queued' }
 
-    // Persist full report to COS
-    const reportKey = await saveReport(scanId, report)
-
-    // Persist summary to Cloudant (with COS URL for reference)
-    await saveScanSummary({
-      ...report,
-      reportUrl: `cos://${process.env.IBM_COS_BUCKET_NAME}/${reportKey}`,
-    })
-
-    // Mark as complete in Cloudant
-    await updateScanStatus({
-      scanId,
-      status: 'complete',
-      phase: 'storing',
-      progress: 100,
-    })
-
-    const responseBody: ScanResponse = { scanId, status: 'queued' }
-    return Response.json(responseBody, { status: 201 })
-
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error(`[POST /api/scan] Pipeline error for ${repoUrl}: ${message}`)
-
-    // Write error status to Cloudant so /api/scan/[scanId] can surface it
+  async function runPipeline() {
     try {
+      const report = await runScanPipeline(repoUrl, scanId, githubToken)
+      const reportKey = await saveReport(scanId, report)
+      await saveScanSummary({
+        ...report,
+        reportUrl: `cos://${process.env.IBM_COS_BUCKET_NAME}/${reportKey}`,
+      })
       await updateScanStatus({
         scanId,
-        status: 'error',
-        phase: 'fetching',
-        progress: 0,
-        error: message,
+        status: 'complete',
+        phase: 'storing',
+        progress: 100,
       })
-    } catch {
-      // Best-effort — don't mask the original error
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[POST /api/scan] Pipeline error for ${repoUrl}: ${message}`)
+      try {
+        await updateScanStatus({
+          scanId,
+          status: 'error',
+          phase: 'fetching',
+          progress: 0,
+          error: message,
+        })
+      } catch { /* best-effort */ }
     }
-
-    return Response.json({ error: message }, { status: 500 })
   }
+
+  // Use Vercel's waitUntil if available (keeps serverless fn alive after response).
+  // Falls back to a detached promise in local dev — Next.js dev server keeps running.
+  try {
+    const ctx = (globalThis as Record<string, unknown>)
+    if (typeof ctx['__vercel_waitUntil__'] === 'function') {
+      (ctx['__vercel_waitUntil__'] as (p: Promise<unknown>) => void)(runPipeline())
+    } else {
+      void runPipeline()
+    }
+  } catch {
+    void runPipeline()
+  }
+
+  return Response.json(responseBody, { status: 201 })
 }
