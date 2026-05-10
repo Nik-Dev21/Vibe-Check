@@ -11,8 +11,7 @@
 
 import { v4 as uuidv4 } from 'uuid'
 import { getRepoFiles } from '../github'
-import { runFastPass } from './fast-pass'
-import { runDeepScan } from './deep-scan'
+import { runFastPassAndDeepScan } from './fast-pass'
 import { enrichContext, escalateSeverities } from './context-layer'
 import { buildReport } from './report-builder'
 import { updateScanStatus } from '../ibm/cloudant'
@@ -60,16 +59,14 @@ export async function runScanPipeline(
   // Infer repo name from URL
   const repoName = repoUrl.split('/').filter(Boolean).slice(-1)[0] ?? repoUrl
 
-  // ── Phase 2+4: Fast-pass + NLU run in parallel (independent of each other) ─
+  // ── Phase 2+3+4: Fast-pass, deep-scan, and NLU all run concurrently ──────
+  // NLU (context layer) is independent — kick it off immediately.
+  // Fast-pass + deep-scan are pipelined: each file is classified then deep-scanned.
   await setStatus('classifying', 20)
-  const [fastPassResults, contextRisk] = await Promise.all([
-    runFastPass(files),
+  const [{ fastPassResults, rawVulnerabilities }, contextRisk] = await Promise.all([
+    runFastPassAndDeepScan(files, (progress) => setStatus('deep-scan', 30 + Math.round(progress * 55))),
     enrichContext(files),
   ])
-
-  // ── Phase 3: Deep scan — Featherless + watsonx in parallel per HIGH file ──
-  await setStatus('deep-scan', 50)
-  const rawVulnerabilities = await runDeepScan(files, fastPassResults)
 
   // Escalate severities based on app context (e.g. MEDIUM → HIGH for SENSITIVE apps)
   const vulnerabilities = escalateSeverities(rawVulnerabilities, contextRisk)

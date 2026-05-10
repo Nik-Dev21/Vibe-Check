@@ -26,22 +26,22 @@ interface ScanResultPageProps {
 async function fetchReport(scanId: string): Promise<ScanReport> {
   if (scanId === 'mock') return MOCK_SCAN_REPORT
 
-  // Check COS first — it has the full report when the scan is done
-  const fullReport = await getReport(scanId)
-  if (fullReport) return fullReport
-
-  // COS doesn't have it yet — check Cloudant for status
+  // Check Cloudant first (fast) to avoid a slow COS fetch on in-progress scans
   const doc = await getScan(scanId)
+
   if (!doc) throw new Error('Scan not found')
 
   if ('status' in (doc as object)) {
     const status = doc as unknown as ScanStatus
     if (status.status === 'error') throw new Error(`Scan failed: ${status.error ?? 'unknown error'}`)
-    // Still scanning — send back to loading page
-    redirect(`/scan/${scanId}/loading`)
+    if (status.status !== 'complete') redirect(`/scan/${scanId}/loading`)
   }
 
-  // Cloudant has a summary doc (no full vulnerabilities) — use it
+  // Scan is complete — fetch full report from COS (has vulnerabilities array)
+  const fullReport = await getReport(scanId)
+  if (fullReport) return fullReport
+
+  // COS not available — use the Cloudant summary doc
   return doc as unknown as ScanReport
 }
 

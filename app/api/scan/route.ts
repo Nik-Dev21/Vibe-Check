@@ -94,17 +94,14 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  // Use Vercel's waitUntil if available (keeps serverless fn alive after response).
-  // Falls back to a detached promise in local dev — Next.js dev server keeps running.
-  try {
-    const ctx = (globalThis as Record<string, unknown>)
-    if (typeof ctx['__vercel_waitUntil__'] === 'function') {
-      (ctx['__vercel_waitUntil__'] as (p: Promise<unknown>) => void)(runPipeline())
-    } else {
-      void runPipeline()
-    }
-  } catch {
-    void runPipeline()
+  // Detach pipeline from the request handler so the response returns immediately.
+  // setImmediate pushes work after the current call stack (including response send).
+  // On Vercel, waitUntil keeps the function alive past response flush.
+  const ctx = globalThis as Record<string, unknown>
+  if (typeof ctx['__vercel_waitUntil__'] === 'function') {
+    ;(ctx['__vercel_waitUntil__'] as (p: Promise<unknown>) => void)(runPipeline())
+  } else {
+    setImmediate(() => { void runPipeline() })
   }
 
   return Response.json(responseBody, { status: 201 })

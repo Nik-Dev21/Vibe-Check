@@ -54,19 +54,16 @@ async function generateText(prompt: string): Promise<string> {
 
   const token = await getIBMToken()
 
+  // Use the chat endpoint (OpenAI-compatible) — works with llama-3-3-70b-instruct
   const payload = {
     model_id: modelId,
-    input: prompt,
-    parameters: {
-      decoding_method: 'greedy',
-      max_new_tokens: 2000,
-      repetition_penalty: 1.05,
-    },
+    messages: [{ role: 'user', content: prompt }],
+    parameters: { max_tokens: 2000 },
     project_id: projectId,
   }
 
   const res = await fetch(
-    `${baseUrl}/ml/v1/text/generation?version=2023-05-29`,
+    `${baseUrl}/ml/v1/text/chat?version=2023-05-29`,
     {
       method: 'POST',
       headers: {
@@ -84,12 +81,12 @@ async function generateText(prompt: string): Promise<string> {
   }
 
   const data = await res.json() as {
-    results?: Array<{ generated_text: string }>
+    choices?: Array<{ message: { content: string } }>
   }
 
-  const generated = data.results?.[0]?.generated_text
+  const generated = data.choices?.[0]?.message?.content
   if (!generated) {
-    throw new Error('[watsonx] No generated_text in response')
+    throw new Error('[watsonx] No content in response')
   }
 
   return generated.trim()
