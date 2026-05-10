@@ -82,7 +82,7 @@ export default function ScanInput() {
       }
 
       const data = (await res.json()) as { scanId: string }
-      router.push(`/scan/${data.scanId}`)
+      router.push(`/scan/${data.scanId}/loading`)
     } catch (err) {
       setError(
         err instanceof Error

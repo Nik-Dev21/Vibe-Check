@@ -60,17 +60,16 @@ export async function runScanPipeline(
   // Infer repo name from URL
   const repoName = repoUrl.split('/').filter(Boolean).slice(-1)[0] ?? repoUrl
 
-  // ── Phase 2: Featherless fast-pass ─────────────────────────────────────────
+  // ── Phase 2+4: Fast-pass + NLU run in parallel (independent of each other) ─
   await setStatus('classifying', 20)
-  const fastPassResults = await runFastPass(files)
+  const [fastPassResults, contextRisk] = await Promise.all([
+    runFastPass(files),
+    enrichContext(files),
+  ])
 
-  // ── Phase 3: watsonx.ai deep scan ─────────────────────────────────────────
-  await setStatus('deep-scan', 45)
+  // ── Phase 3: Deep scan — Featherless + watsonx in parallel per HIGH file ──
+  await setStatus('deep-scan', 50)
   const rawVulnerabilities = await runDeepScan(files, fastPassResults)
-
-  // ── Phase 4: NLU context enrichment ────────────────────────────────────────
-  await setStatus('context', 70)
-  const contextRisk = await enrichContext(files)
 
   // Escalate severities based on app context (e.g. MEDIUM → HIGH for SENSITIVE apps)
   const vulnerabilities = escalateSeverities(rawVulnerabilities, contextRisk)

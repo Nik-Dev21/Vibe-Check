@@ -144,6 +144,164 @@ SENSITIVE_DATA_EXPOSURE, SECURITY_MISCONFIGURATION, IDOR, SSRF, PATH_TRAVERSAL`
 }
 
 /**
+ * Deep-scan a single file for vulnerabilities using Featherless.
+ * Returns a structured list of findings (may be empty if file is clean).
+ */
+export async function deepScanFile(
+  filePath: string,
+  fileContent: string
+): Promise<import('./types').Vulnerability[]> {
+  const client = getClient()
+  const model = getModel()
+  const { v4: uuidv4 } = await import('uuid')
+
+  const truncated = fileContent.slice(0, MAX_FILE_CHARS)
+
+  const prompt = `You are an expert security auditor. Perform a comprehensive vulnerability analysis on this code.
+
+File: ${filePath}
+Content:
+${truncated}
+
+Identify ALL security vulnerabilities. Respond ONLY with a valid JSON array (no markdown, no extra text):
+[{
+  "lineNumber": 42,
+  "severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO",
+  "category": "HARDCODED_SECRET" | "SQL_INJECTION" | "XSS" | "BROKEN_AUTH" | "INSECURE_DEPENDENCY" | "SENSITIVE_DATA_EXPOSURE" | "SECURITY_MISCONFIGURATION" | "IDOR" | "SSRF" | "PATH_TRAVERSAL",
+  "title": "short title",
+  "description": "Two sentence plain-English description.",
+  "fixSuggestion": "Actionable one-sentence fix.",
+  "codeSnippet": "exact vulnerable line(s)",
+  "cveReference": "CVE-XXXX-XXXX or null"
+}]
+
+If there are no vulnerabilities, respond with: []`
+
+  const completion = await client.chat.completions.create({
+    model,
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0,
+    max_tokens: 1200,
+  })
+
+  const raw = completion.choices[0]?.message?.content?.trim() ?? ''
+  const jsonMatch = raw.match(/\[[\s\S]*\]/)
+  if (!jsonMatch) return []
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(jsonMatch[0])
+  } catch {
+    return []
+  }
+
+  if (!Array.isArray(parsed)) return []
+
+  const DeepFindingSchema = z.object({
+    lineNumber: z.number().optional(),
+    severity: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']),
+    category: z.enum([
+      'HARDCODED_SECRET', 'SQL_INJECTION', 'XSS', 'BROKEN_AUTH',
+      'INSECURE_DEPENDENCY', 'SENSITIVE_DATA_EXPOSURE', 'SECURITY_MISCONFIGURATION',
+      'IDOR', 'SSRF', 'PATH_TRAVERSAL',
+    ]),
+    title: z.string(),
+    description: z.string(),
+    fixSuggestion: z.string(),
+    codeSnippet: z.string().optional(),
+    cveReference: z.string().nullable().optional(),
+  })
+
+  const findings: import('./types').Vulnerability[] = []
+  for (const item of parsed) {
+    const result = DeepFindingSchema.safeParse(item)
+    if (!result.success) continue
+    findings.push({
+      id: `vuln-${uuidv4()}`,
+      filePath,
+      lineNumber: result.data.lineNumber,
+      severity: result.data.severity as import('./types').Severity,
+      category: result.data.category as import('./types').VulnCategory,
+      title: result.data.title,
+      description: result.data.description,
+      fixSuggestion: result.data.fixSuggestion,
+      codeSnippet: result.data.codeSnippet,
+      cveReference: result.data.cveReference ?? undefined,
+      detectedBy: 'featherless',
+    })
+  }
+
+  return findings
+}
+
+/**
+ * Generate an auto-fix patch for a single vulnerability using Featherless.
+ */
+export async function generateAutoFix(
+  filePath: string,
+  title: string,
+  category: string,
+  severity: string,
+  codeSnippet: string
+): Promise<{ original: string; fixed: string; explanation: string }> {
+  const client = getClient()
+  const model = getModel()
+
+  const prompt = `You are a security engineer. Fix the following vulnerability in this code.
+
+File: ${filePath}
+Vulnerability: ${title}
+Category: ${category}
+Severity: ${severity}
+Vulnerable code:
+${codeSnippet}
+
+Return ONLY valid JSON (no markdown, no extra text):
+{
+  "original": "the exact vulnerable code snippet",
+  "fixed": "the corrected replacement code",
+  "explanation": "one sentence explaining what changed and why it's now secure"
+}
+
+Rules:
+- Only change the minimum code necessary to fix this specific vulnerability
+- Preserve all existing logic, formatting, and surrounding code style
+- Do not introduce new dependencies unless absolutely required
+- The fixed code must be a drop-in replacement for the original snippet`
+
+  const completion = await client.chat.completions.create({
+    model,
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0,
+    max_tokens: 1000,
+  })
+
+  const raw = completion.choices[0]?.message?.content?.trim() ?? ''
+  const jsonMatch = raw.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error('[Featherless] generateAutoFix returned no JSON')
+
+  const AutoFixSchema = z.object({
+    original: z.string(),
+    fixed: z.string(),
+    explanation: z.string(),
+  })
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(jsonMatch[0])
+  } catch {
+    throw new Error(`[Featherless] generateAutoFix JSON parse error: ${jsonMatch[0].slice(0, 200)}`)
+  }
+
+  const result = AutoFixSchema.safeParse(parsed)
+  if (!result.success) {
+    throw new Error(`[Featherless] generateAutoFix schema validation failed: ${result.error.message}`)
+  }
+
+  return result.data
+}
+
+/**
  * Lightweight ping — checks if Featherless API is reachable.
  */
 export async function pingFeatherless(): Promise<void> {

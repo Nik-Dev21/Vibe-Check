@@ -9,7 +9,9 @@ import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 import { auth } from '@/lib/auth'
 import { MOCK_SCAN_REPORT } from '@/lib/mock-data'
-import type { ScanReport } from '@/lib/types'
+import { getScan } from '@/lib/ibm/cloudant'
+import { getReport } from '@/lib/ibm/cos'
+import type { ScanReport, ScanStatus } from '@/lib/types'
 import Navbar from '@/components/layout/navbar'
 import Footer from '@/components/layout/footer'
 import ReportHeader from '@/components/report/report-header'
@@ -22,18 +24,25 @@ interface ScanResultPageProps {
 }
 
 async function fetchReport(scanId: string): Promise<ScanReport> {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
-  try {
-    const res = await fetch(`${baseUrl}/api/scan/${scanId}`, { cache: 'no-store' })
-    if (res.ok) {
-      const data = await res.json()
-      // If it has securityScore, it's a complete report
-      if ('securityScore' in data) return data as ScanReport
-    }
-  } catch {
-    // API not available — fall back to mock
+  if (scanId === 'mock') return MOCK_SCAN_REPORT
+
+  // Check COS first — it has the full report when the scan is done
+  const fullReport = await getReport(scanId)
+  if (fullReport) return fullReport
+
+  // COS doesn't have it yet — check Cloudant for status
+  const doc = await getScan(scanId)
+  if (!doc) throw new Error('Scan not found')
+
+  if ('status' in (doc as object)) {
+    const status = doc as unknown as ScanStatus
+    if (status.status === 'error') throw new Error(`Scan failed: ${status.error ?? 'unknown error'}`)
+    // Still scanning — send back to loading page
+    redirect(`/scan/${scanId}/loading`)
   }
-  return MOCK_SCAN_REPORT
+
+  // Cloudant has a summary doc (no full vulnerabilities) — use it
+  return doc as unknown as ScanReport
 }
 
 export async function generateMetadata({ params }: ScanResultPageProps): Promise<Metadata> {

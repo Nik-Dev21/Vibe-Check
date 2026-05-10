@@ -8,12 +8,12 @@
 import { classifyFile, MAX_FILE_CHARS } from '../featherless'
 import type { RepoFile, FastPassResult } from '../types'
 
-// Max concurrent Featherless requests.
-// Plan limit = 4 units; model costs 2 units/request → max 2 concurrent.
-const CONCURRENCY = 2
+// 1 request at a time: model costs 2 units/request, plan limit = 4 units.
+// Sending 2 concurrent = 4 units used, but any retry or overlap tips over — use 1.
+const CONCURRENCY = 1
 
-/** 300ms breathing room between batches to avoid 429 bursts */
-const BATCH_DELAY_MS = 300
+/** No delay needed — CONCURRENCY=1 means requests are truly sequential */
+const BATCH_DELAY_MS = 0
 
 /**
  * File extensions that are never meaningful for security scanning.

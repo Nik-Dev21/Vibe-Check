@@ -6,7 +6,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import { generateAutoFix } from '../ibm/watsonx'
+import { generateAutoFix } from '../featherless'
 import type { Vulnerability, AutoFix } from '../types'
 
 /**
@@ -64,6 +64,6 @@ export function buildVulnerabilityFromFixRequest(params: {
     description: 'Vulnerability submitted for auto-fix.',
     fixSuggestion: '',
     codeSnippet: params.codeSnippet,
-    detectedBy: 'watsonx',
+    detectedBy: 'featherless',
   }
 }
