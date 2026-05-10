@@ -6,7 +6,15 @@
  */
 
 import { CloudantV1, IamAuthenticator } from '@ibm-cloud/cloudant'
-import type { ScanReport, ScanStatus } from '../types'
+import type { ScanReport, ScanStatus, Vulnerability } from '../types'
+
+// Extra fields written to Cloudant during streaming scan — not part of ScanStatus type
+export interface ScanStatusExtra {
+  partialFindings?: Vulnerability[]
+  enrichedFindings?: Vulnerability[]
+  enrichingFiles?: string[]
+  topHighFiles?: Array<{ filePath: string; content: string; confidence: number }>
+}
 
 let cloudantClient: CloudantV1 | null = null
 let dbEnsured = false
@@ -62,7 +70,7 @@ async function ensureDatabase(): Promise<void> {
  * Write a ScanStatus doc to Cloudant. Used during active scans.
  * If a doc already exists, it is updated (rev fetched internally).
  */
-export async function updateScanStatus(status: ScanStatus): Promise<void> {
+export async function updateScanStatus(status: ScanStatus & Partial<ScanStatusExtra>): Promise<void> {
   await ensureDatabase()
   const client = getClient()
   const db = getDbName()
@@ -85,6 +93,42 @@ export async function updateScanStatus(status: ScanStatus): Promise<void> {
   if (rev) doc._rev = rev
 
   await client.putDocument({ db, docId: status.scanId, document: doc })
+}
+
+/**
+ * Append enriched findings from watsonx to an existing scan doc.
+ * Merges with any existing enrichedFindings array and updates enrichingFiles.
+ */
+export async function appendEnrichedFindings(
+  scanId: string,
+  filePath: string,
+  newFindings: Vulnerability[]
+): Promise<void> {
+  await ensureDatabase()
+  const client = getClient()
+  const db = getDbName()
+
+  let rev: string | undefined
+  let existing: Record<string, unknown> = {}
+  try {
+    const res = await client.getDocument({ db, docId: scanId })
+    rev = res.result._rev
+    existing = res.result as Record<string, unknown>
+  } catch { /* doc may not exist yet */ }
+
+  const prevEnriched = (existing.enrichedFindings as Vulnerability[] | undefined) ?? []
+  const prevEnrichingFiles = (existing.enrichingFiles as string[] | undefined) ?? []
+
+  const doc: Record<string, unknown> = {
+    ...existing,
+    _id: scanId,
+    enrichedFindings: [...prevEnriched, ...newFindings],
+    enrichingFiles: prevEnrichingFiles.filter((f) => f !== filePath),
+    updatedAt: new Date().toISOString(),
+  }
+  if (rev) doc._rev = rev
+
+  await client.putDocument({ db, docId: scanId, document: doc })
 }
 
 /**

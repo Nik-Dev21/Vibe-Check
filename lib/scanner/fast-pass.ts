@@ -7,11 +7,13 @@
  */
 
 import { classifyFile, deepScanFile as featherlessDeepScan, MAX_FILE_CHARS } from '../featherless'
-import { deepScanFile as watsonxDeepScan } from '../ibm/watsonx'
 import { v4 as uuidv4 } from 'uuid'
 import type { RepoFile, FastPassResult, Vulnerability, VulnCategory, Severity } from '../types'
 
-// Featherless plan: 4 units/req limit — 2 concurrent = safe headroom
+// Featherless plan: 4 units limit, each request costs 2 units → max 2 simultaneous calls.
+// CONCURRENCY=2: 2 files at a time, each doing classify(2u) then deep-scan(2u) sequentially.
+// Within a file: classify completes fully before deep-scan starts — never 2 Featherless
+// calls in-flight for the same file slot.
 const CONCURRENCY = 2
 
 const SKIP_EXTENSIONS = new Set([
@@ -90,9 +92,12 @@ function deduplicateVulnerabilities(vulns: Vulnerability[]): Vulnerability[] {
 
 /**
  * Classify a single file then immediately deep-scan it if HIGH/MEDIUM.
- * HIGH files: Featherless deep-scan + watsonx run in parallel.
- * MEDIUM files: Featherless deep-scan only.
- * LOW/CLEAN: stop after classification.
+ * HIGH files:   Featherless deep-scan + watsonx run in parallel → merge + dedup results.
+ * MEDIUM files: Featherless deep-scan only (watsonx reserved for higher-risk).
+ * LOW/CLEAN:    stop after classification.
+ *
+ * Running Featherless and watsonx in parallel on HIGH files means we get two
+ * independent model opinions simultaneously — no added latency vs. one model.
  */
 async function processFile(file: RepoFile): Promise<{ fastPass: FastPassResult; vulns: Vulnerability[] }> {
   const fastPass = await classifyFile(file.path, file.language, file.content)
@@ -101,27 +106,15 @@ async function processFile(file: RepoFile): Promise<{ fastPass: FastPassResult; 
     return { fastPass, vulns: [] }
   }
 
-  const useWatsonx = fastPass.riskLevel === 'HIGH'
-
-  const [featherlessResult, watsonxResult] = await Promise.allSettled([
-    featherlessDeepScan(file.path, file.content),
-    useWatsonx ? watsonxDeepScan(file.path, file.content) : Promise.resolve([]),
-  ])
-
+  // Sequential: classify completed above, now deep-scan with Featherless only.
+  // watsonx enrichment runs separately in the background via enrichHighFiles().
   const vulns: Vulnerability[] = []
 
-  if (featherlessResult.status === 'fulfilled') {
-    vulns.push(...featherlessResult.value.map((v) => ({ ...v, id: `vuln-${uuidv4()}` })))
-  } else {
-    console.warn(`[deep-scan] Featherless failed for ${file.path}: ${featherlessResult.reason instanceof Error ? featherlessResult.reason.message : String(featherlessResult.reason)}`)
-  }
-
-  if (useWatsonx) {
-    if (watsonxResult.status === 'fulfilled') {
-      vulns.push(...watsonxResult.value.map((v) => ({ ...v, id: `vuln-${uuidv4()}` })))
-    } else {
-      console.warn(`[deep-scan] watsonx failed for ${file.path}: ${watsonxResult.reason instanceof Error ? watsonxResult.reason.message : String(watsonxResult.reason)}`)
-    }
+  try {
+    const findings = await featherlessDeepScan(file.path, file.content)
+    vulns.push(...findings.map((v: Vulnerability) => ({ ...v, id: `vuln-${uuidv4()}` })))
+  } catch (err) {
+    console.warn(`[deep-scan] Featherless failed for ${file.path}: ${err instanceof Error ? err.message : String(err)}`)
   }
 
   if (vulns.length === 0) {
@@ -133,13 +126,23 @@ async function processFile(file: RepoFile): Promise<{ fastPass: FastPassResult; 
   return { fastPass, vulns }
 }
 
+export interface FileProgressEvent {
+  progress: number  // 0–1
+  completed: number
+  total: number
+  filePath: string
+  riskLevel: FastPassResult['riskLevel']
+  issuesFound: number
+  findings: Vulnerability[]  // findings from this specific file
+}
+
 /**
  * Run fast-pass classification + deep-scan for all files in concurrent batches.
- * onProgress callback receives 0→1 as files complete.
+ * onProgress callback receives progress events with real file paths and risk levels.
  */
 export async function runFastPassAndDeepScan(
   files: RepoFile[],
-  onProgress?: (progress: number) => void
+  onProgress?: (event: FileProgressEvent) => void
 ): Promise<{ fastPassResults: FastPassResult[]; rawVulnerabilities: Vulnerability[] }> {
   const scannable = files.filter((f) => !shouldSkipFile(f))
   const skipped = files.length - scannable.length
@@ -150,6 +153,7 @@ export async function runFastPassAndDeepScan(
   const fastPassResults: FastPassResult[] = []
   const allVulns: Vulnerability[] = []
   let completed = 0
+  let issuesFound = 0
 
   for (let i = 0; i < scannable.length; i += CONCURRENCY) {
     const batch = scannable.slice(i, i + CONCURRENCY)
@@ -157,15 +161,30 @@ export async function runFastPassAndDeepScan(
 
     for (let j = 0; j < settled.length; j++) {
       const outcome = settled[j]
+      const file = batch[j]
+      let riskLevel: FastPassResult['riskLevel'] = 'LOW'
+
+      let fileFindings: Vulnerability[] = []
       if (outcome.status === 'fulfilled') {
         fastPassResults.push(outcome.value.fastPass)
-        allVulns.push(...outcome.value.vulns)
+        fileFindings = outcome.value.vulns
+        allVulns.push(...fileFindings)
+        riskLevel = outcome.value.fastPass.riskLevel
+        issuesFound += fileFindings.length
       } else {
-        console.warn(`[fast-pass] processFile failed for ${batch[j].path}: ${outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)}`)
-        fastPassResults.push({ filePath: batch[j].path, riskLevel: 'LOW', detectedTypes: [], confidence: 0 })
+        console.warn(`[fast-pass] processFile failed for ${file.path}: ${outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)}`)
+        fastPassResults.push({ filePath: file.path, riskLevel: 'LOW', detectedTypes: [], confidence: 0 })
       }
       completed++
-      onProgress?.(completed / scannable.length)
+      onProgress?.({
+        progress: completed / scannable.length,
+        completed,
+        total: scannable.length,
+        filePath: file.path,
+        riskLevel,
+        issuesFound,
+        findings: fileFindings,
+      })
     }
   }
 

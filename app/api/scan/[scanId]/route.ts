@@ -28,7 +28,7 @@ export async function GET(
       return Response.json({ error: 'Scan not found' }, { status: 404 })
     }
 
-    // Status doc (scanning/error) — return as-is so poller can track progress
+    // Status doc (scanning/error) — return as-is so poller can track live progress
     if ('status' in doc && (doc as ScanStatus).status !== 'complete') {
       return Response.json(doc)
     }

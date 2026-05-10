@@ -12,6 +12,7 @@
     "@base-ui/react": "^1.4.1",
     "@ibm-cloud/cloudant": "^0.12.19",
     "@ibm-cloud/watsonx-ai": "^1.7.11",
+    "@vercel/functions": "^3.5.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "diff": "^9.0.0",

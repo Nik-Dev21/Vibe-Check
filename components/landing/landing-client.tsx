@@ -10,12 +10,12 @@ import RepoSelector from '@/components/repo-selector'
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const CYCLING_WORDS = [
-  { word: 'vulnerabilities', color: 'var(--color-critical)' },
-  { word: 'leaked secrets',  color: 'var(--color-high)' },
-  { word: 'open auth gaps',  color: 'var(--color-medium)' },
-  { word: 'SQL injection',   color: 'var(--color-critical)' },
-  { word: 'exposed env vars',color: 'var(--color-high)' },
-  { word: 'missing CSP',     color: 'var(--color-low)' },
+  { word: 'vulnerabilities', font: '"Georgia", serif' },
+  { word: 'leaked secrets',  font: '"Courier New", monospace' },
+  { word: 'open auth gaps',  font: '"Impact", "Arial Narrow", sans-serif' },
+  { word: 'SQL injection',   font: '"Palatino Linotype", serif' },
+  { word: 'exposed env vars',font: '"Trebuchet MS", sans-serif' },
+  { word: 'missing CSP',     font: '"Arial Black", sans-serif' },
 ]
 
 const LIVE_FINDINGS = [
@@ -59,23 +59,17 @@ function CyclingWord() {
     <span
       key={i}
       style={{
-        position: 'relative',
         display: 'inline-block',
-        color: cur.color,
+        fontFamily: cur.font,
+        color: 'var(--color-text-primary)',
         whiteSpace: 'nowrap',
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
+        fontStyle: 'normal',
         animation: 'fade-up 500ms cubic-bezier(.2,.7,.2,1) both',
       }}
     >
       {cur.word}
-      <span style={{
-        position: 'absolute',
-        left: 0, right: 0,
-        bottom: '0.12em',
-        height: '0.07em',
-        background: cur.color,
-        transformOrigin: 'left center',
-        animation: 'strike-draw 600ms cubic-bezier(.2,.7,.2,1) 250ms both',
-      }} />
     </span>
   )
 }
@@ -187,62 +181,61 @@ function HeroBackdrop() {
 }
 
 function FloatingCards() {
+  // Fixed positions relative to hero section corners, not viewport-width offsets
   const cards = [
-    { sev: 'critical', title: 'Hardcoded Stripe key', file: '.env.production', x: '-38vw', y: -60,  rot: -8, delay: 0 },
-    { sev: 'critical', title: 'SQL injection',        file: 'users/route.ts',  x: '38vw',  y: -110, rot:  6, delay: 0.4 },
-    { sev: 'high',     title: 'Missing auth check',   file: 'admin/route.ts',  x: '-40vw', y:  140, rot: -5, delay: 0.8 },
-    { sev: 'medium',   title: 'Permissive CORS',      file: 'next.config.js',  x: '40vw',  y:  190, rot:  7, delay: 1.2 },
+    { sev: 'critical', title: 'Hardcoded Stripe key',  file: '.env.production',  pos: { top: '16%', left: '12%'  }, rot: -5,  delay: 0   },
+    { sev: 'critical', title: 'SQL injection',          file: 'users/route.ts',   pos: { top: '12%', right: '12%' }, rot:  4,  delay: 0.3 },
+    { sev: 'high',     title: 'Missing auth check',     file: 'admin/route.ts',   pos: { top: '64%', left: '11%'  }, rot: -4,  delay: 0.6 },
+    { sev: 'medium',   title: 'Permissive CORS policy', file: 'next.config.js',   pos: { top: '60%', right: '11%' }, rot:  5,  delay: 0.9 },
   ]
   return (
-    <div style={{
-      position: 'absolute',
-      left: '50%', top: '50%',
-      transform: 'translate(-50%, -50%)',
-      width: 0, height: 0,
-      pointerEvents: 'none',
-    }}>
+    <>
       {cards.map((c) => {
         const color = SEVERITY_COLOR[c.sev]
         return (
           <div key={c.title} style={{
             position: 'absolute',
-            left: c.x,
-            top: c.y,
-            transform: `translate(-50%, -50%) rotate(${c.rot}deg)`,
-            width: 220,
-            padding: '10px 12px',
-            background: 'rgba(10,10,10,0.85)',
-            backdropFilter: 'blur(6px)',
-            border: '1px solid var(--color-border)',
+            ...c.pos,
+            transform: `rotate(${c.rot}deg)`,
+            width: 210,
+            padding: '11px 13px',
+            background: 'rgba(8,8,8,0.88)',
+            backdropFilter: 'blur(8px)',
+            border: `1px solid color-mix(in srgb, ${color} 22%, var(--color-border))`,
             borderRadius: 10,
-            boxShadow: '0 24px 48px -16px rgba(0,0,0,0.7)',
+            boxShadow: `0 20px 48px -12px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.03) inset`,
             opacity: 0,
-            animation: `detect-pop 700ms cubic-bezier(.2,.7,.2,1) ${c.delay}s both, orb-drift 18s ease-in-out ${c.delay}s infinite`,
+            pointerEvents: 'none',
+            animation: `detect-pop 700ms cubic-bezier(.2,.7,.2,1) ${c.delay}s both, orb-drift 20s ease-in-out ${c.delay}s infinite`,
             // @ts-expect-error CSS custom props
             '--dx': '0px',
-            '--dy': '-8px',
+            '--dy': '-10px',
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <span style={{ width: 6, height: 6, borderRadius: 999, background: color, boxShadow: `0 0 8px ${color}` }} />
-              <span className="uppercase-label" style={{ color, fontSize: 9.5 }}>{c.sev}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
+              <span style={{ width: 6, height: 6, borderRadius: 999, background: color, boxShadow: `0 0 8px ${color}`, flexShrink: 0 }} />
+              <span className="uppercase-label" style={{ color, fontSize: 9 }}>{c.sev}</span>
+              <span style={{ marginLeft: 'auto', fontFamily: 'monospace', fontSize: 9, color: 'var(--color-text-tertiary)' }}>detected</span>
             </div>
             <div style={{
-              fontFamily: 'var(--font-display, Poppins, sans-serif)',
-              fontSize: 13, fontWeight: 600,
+              fontFamily: 'Poppins, sans-serif',
+              fontSize: 12.5, fontWeight: 600,
               color: 'var(--color-text-primary)',
               letterSpacing: '-0.01em',
-              marginBottom: 4,
+              marginBottom: 5,
+              lineHeight: 1.3,
             }}>{c.title}</div>
             <div style={{
               fontFamily: 'monospace',
-              fontSize: 10.5,
+              fontSize: 10,
               color: 'var(--color-text-tertiary)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              paddingTop: 6,
+              borderTop: '1px solid var(--color-border-subtle)',
             }}>{c.file}</div>
           </div>
         )
       })}
-    </div>
+    </>
   )
 }
 
@@ -297,22 +290,6 @@ function LiveFindingTicker() {
   )
 }
 
-function Counter({ to, duration = 1400 }: { to: number; duration?: number }) {
-  const [v, setV] = useState(0)
-  useEffect(() => {
-    let raf: number
-    const start = performance.now()
-    const tick = (t: number) => {
-      const p = Math.min(1, (t - start) / duration)
-      const eased = 1 - Math.pow(1 - p, 3)
-      setV(to * eased)
-      if (p < 1) raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [to, duration])
-  return <span>{Math.round(v).toLocaleString()}</span>
-}
 
 function VibeMarquee() {
   const doubled = [...MARQUEE_ITEMS, ...MARQUEE_ITEMS]
@@ -554,30 +531,10 @@ function Hero() {
       <HeroBackdrop />
       <MouseSpotlight />
       <div className="noise-overlay" />
+      {/* Floating cards render directly in section so top/left/right are section-relative */}
       <FloatingCards />
 
       <div style={{ position: 'relative', maxWidth: 1040, width: '100%', textAlign: 'center' }}>
-        {/* Eyebrow */}
-        <div className="fade-up" style={{
-          display: 'inline-flex', alignItems: 'center', gap: 10,
-          padding: '6px 14px',
-          border: '1px solid var(--color-border)',
-          borderRadius: 999,
-          marginBottom: 36,
-          fontFamily: 'monospace',
-          fontSize: 11.5,
-          color: 'var(--color-text-secondary)',
-          background: 'rgba(255,255,255,0.02)',
-        }}>
-          <span style={{
-            width: 6, height: 6, borderRadius: '50%',
-            background: 'var(--color-clean)',
-            boxShadow: '0 0 8px var(--color-clean)',
-            animation: 'pulse-soft 1.4s ease-in-out infinite',
-          }} />
-          Pre-deploy security gate · v0.4 beta
-        </div>
-
         {/* Headline */}
         <h1 className="fade-up" style={{
           fontFamily: 'Poppins, ui-sans-serif, sans-serif',
@@ -618,35 +575,6 @@ function Hero() {
           <LiveFindingTicker />
         </div>
 
-        {/* Live counters */}
-        <div className="fade-up" style={{
-          marginTop: 40,
-          display: 'flex',
-          justifyContent: 'center',
-          gap: 56,
-          animationDelay: '320ms',
-          flexWrap: 'wrap',
-        }}>
-          {[
-            { label: 'Repos scanned today',   value: 1247, color: 'var(--color-text-primary)' },
-            { label: 'Vulnerabilities found', value: 18432, color: 'var(--color-critical)' },
-            { label: 'Patches shipped',       value: 9871, color: 'var(--color-clean)' },
-          ].map((s) => (
-            <div key={s.label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-              <div style={{
-                fontFamily: 'Poppins, ui-sans-serif, sans-serif',
-                fontWeight: 700,
-                fontSize: 24,
-                lineHeight: 1,
-                letterSpacing: '-0.025em',
-                color: s.color,
-              }}>
-                <Counter to={s.value} duration={1800} />
-              </div>
-              <div className="uppercase-label">{s.label}</div>
-            </div>
-          ))}
-        </div>
       </div>
     </section>
   )
@@ -896,10 +824,8 @@ function LandingNav() {
           display: 'flex', alignItems: 'center', gap: 10,
           textDecoration: 'none', color: 'var(--color-text-primary)',
         }}>
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <path d="M10 2L3 5v5c0 4.418 3.134 8.56 7 9 3.866-.44 7-4.582 7-9V5L10 2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-            <path d="M7 10l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/vibecheck_logo.png" alt="" width={22} height={22} style={{ filter: 'brightness(0) invert(1)', objectFit: 'contain' }} />
           <span style={{ fontFamily: 'Poppins, ui-sans-serif, sans-serif', fontWeight: 700, fontSize: 15, letterSpacing: '-0.01em' }}>
             VibeCheck
           </span>

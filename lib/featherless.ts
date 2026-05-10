@@ -45,6 +45,44 @@ const FastPassResponseSchema = z.object({
   topIssue: z.string().nullable().optional(),
 })
 
+// ── Retry helper ─────────────────────────────────────────────────────────────
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Wrap a Featherless API call with exponential backoff on 429 rate-limit errors.
+ * On 429: waits 1s × 2^attempt + jitter(0-500ms), up to maxRetries.
+ * On any other error or after exhausting retries: rethrows.
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  maxRetries = 3
+): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastError = err
+      const isRateLimit =
+        (err instanceof Error && err.message.includes('429')) ||
+        (typeof err === 'object' && err !== null && 'status' in err && (err as { status: number }).status === 429)
+
+      if (!isRateLimit || attempt === maxRetries) {
+        throw err
+      }
+
+      const backoffMs = 1000 * Math.pow(2, attempt) + Math.random() * 500
+      console.warn(`[Featherless] 429 on ${label}, retrying in ${backoffMs.toFixed(0)}ms (attempt ${attempt + 1}/${maxRetries})`)
+      await sleep(backoffMs)
+    }
+  }
+  throw lastError
+}
+
 // ── Singleton client ──────────────────────────────────────────────────────────
 
 let featherlessClient: OpenAI | null = null
@@ -101,12 +139,15 @@ valid detectedTypes values (use ONLY these exact strings):
 HARDCODED_SECRET, SQL_INJECTION, XSS, BROKEN_AUTH, INSECURE_DEPENDENCY,
 SENSITIVE_DATA_EXPOSURE, SECURITY_MISCONFIGURATION, IDOR, SSRF, PATH_TRAVERSAL`
 
-  const completion = await client.chat.completions.create({
-    model,
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0,
-    max_tokens: 300,
-  })
+  const completion = await withRetry(
+    () => client.chat.completions.create({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0,
+      max_tokens: 300,
+    }),
+    `classifyFile(${filePath})`
+  )
 
   const raw = completion.choices[0]?.message?.content?.trim() ?? ''
 
@@ -177,12 +218,15 @@ Identify ALL security vulnerabilities. Respond ONLY with a valid JSON array (no 
 
 If there are no vulnerabilities, respond with: []`
 
-  const completion = await client.chat.completions.create({
-    model,
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0,
-    max_tokens: 1200,
-  })
+  const completion = await withRetry(
+    () => client.chat.completions.create({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0,
+      max_tokens: 1200,
+    }),
+    `deepScanFile(${filePath})`
+  )
 
   const raw = completion.choices[0]?.message?.content?.trim() ?? ''
   const jsonMatch = raw.match(/\[[\s\S]*\]/)

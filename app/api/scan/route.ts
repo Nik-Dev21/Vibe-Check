@@ -1,15 +1,19 @@
 /**
  * POST /api/scan
- * Accepts a GitHub repo URL, runs the full scan pipeline, persists results.
- * Returns { scanId, status: 'queued' } immediately while pipeline runs.
+ * Accepts a GitHub repo URL, runs the Featherless fast-pass scan pipeline,
+ * stores the partial report, then kicks off watsonx enrichment via waitUntil.
+ * Returns { scanId, status: 'queued' } immediately.
  *
- * Pipeline runs synchronously within the serverless function.
- * Vercel timeout: 60s (set via maxDuration).
+ * Timeline:
+ *   ~0s   → response returned, client navigates to /loading
+ *   ~25s  → partial report stored, user sees results via SSE stream
+ *   ~50s  → watsonx enrichment completes in background, SSE emits scan_complete
  */
 
+import { waitUntil } from '@vercel/functions'
 import { z } from 'zod'
 import { auth } from '@/lib/auth'
-import { runScanPipeline, generateScanId } from '@/lib/scanner/index'
+import { runScanPipeline, enrichHighFiles, generateScanId } from '@/lib/scanner/index'
 import { saveReport } from '@/lib/ibm/cos'
 import { saveScanSummary, updateScanStatus } from '@/lib/ibm/cloudant'
 import type { ScanResponse } from '@/lib/types'
@@ -17,19 +21,17 @@ import type { ScanResponse } from '@/lib/types'
 export const maxDuration = 60
 
 const ScanRequestSchema = z.object({
-  repoUrl: z.string().url('repoUrl must be a valid URL'),
+  repoUrl: z.string().min(1).refine((v) => {
+    try { new URL(v); return true } catch { return false }
+  }, 'repoUrl must be a valid URL'),
 })
 
 export async function POST(request: Request): Promise<Response> {
-  // ── Parse and validate request body ────────────────────────────────────────
   let body: unknown
   try {
     body = await request.json()
   } catch {
-    return Response.json(
-      { error: 'Invalid JSON in request body' },
-      { status: 400 }
-    )
+    return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 })
   }
 
   const parsed = ScanRequestSchema.safeParse(body)
@@ -43,31 +45,24 @@ export async function POST(request: Request): Promise<Response> {
   const { repoUrl } = parsed.data
   const scanId = generateScanId()
 
-  // Use the authenticated user's GitHub token if available (for private repos)
   const session = await auth()
   const githubToken = session?.accessToken
 
-  // ── Write initial status so /loading can poll immediately ────────────────
+  // Write initial status so /loading can poll immediately
   try {
-    await updateScanStatus({
-      scanId,
-      status: 'scanning',
-      phase: 'fetching',
-      progress: 0,
-    })
+    await updateScanStatus({ scanId, status: 'scanning', phase: 'fetching', progress: 0, repoUrl })
   } catch (err) {
-    console.warn(`[POST /api/scan] Initial status write failed: ${
-      err instanceof Error ? err.message : String(err)
-    }`)
+    console.warn(`[POST /api/scan] Initial status write failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 
-  // ── Respond immediately so the client can navigate to /loading ────────────
-  // Pipeline runs in the background — Vercel waitUntil keeps the function alive.
   const responseBody: ScanResponse = { scanId, status: 'queued' }
 
   async function runPipeline() {
     try {
-      const report = await runScanPipeline(repoUrl, scanId, githubToken)
+      // Phase 1–4: Featherless-only fast scan
+      const { report, topHighFiles } = await runScanPipeline(repoUrl, scanId, githubToken)
+
+      // Store partial report — user sees this via SSE partial_complete
       const reportKey = await saveReport(scanId, report)
       await saveScanSummary({
         ...report,
@@ -75,34 +70,32 @@ export async function POST(request: Request): Promise<Response> {
       })
       await updateScanStatus({
         scanId,
-        status: 'complete',
+        status: 'scanning',
         phase: 'storing',
-        progress: 100,
-      })
+        progress: 93,
+        repoUrl,
+        partialFindings: report.vulnerabilities,
+        enrichingFiles: topHighFiles.map((f) => f.filePath),
+      } as Parameters<typeof updateScanStatus>[0])
+
+      // Phase 5: watsonx enrichment in background — keeps function alive on Vercel
+      if (topHighFiles.length > 0) {
+        waitUntil(enrichHighFiles(scanId, repoUrl, topHighFiles))
+      } else {
+        // Nothing to enrich — mark complete immediately
+        await updateScanStatus({ scanId, status: 'complete', phase: 'storing', progress: 100, repoUrl })
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[POST /api/scan] Pipeline error for ${repoUrl}: ${message}`)
       try {
-        await updateScanStatus({
-          scanId,
-          status: 'error',
-          phase: 'fetching',
-          progress: 0,
-          error: message,
-        })
+        await updateScanStatus({ scanId, status: 'error', phase: 'fetching', progress: 0, error: message, repoUrl })
       } catch { /* best-effort */ }
     }
   }
 
-  // Detach pipeline from the request handler so the response returns immediately.
-  // setImmediate pushes work after the current call stack (including response send).
-  // On Vercel, waitUntil keeps the function alive past response flush.
-  const ctx = globalThis as Record<string, unknown>
-  if (typeof ctx['__vercel_waitUntil__'] === 'function') {
-    ;(ctx['__vercel_waitUntil__'] as (p: Promise<unknown>) => void)(runPipeline())
-  } else {
-    setImmediate(() => { void runPipeline() })
-  }
+  // Detach pipeline — waitUntil keeps the Vercel function alive past response flush
+  waitUntil(runPipeline())
 
   return Response.json(responseBody, { status: 201 })
 }

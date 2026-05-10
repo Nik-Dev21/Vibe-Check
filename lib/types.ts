@@ -79,6 +79,13 @@ export interface ScanStatus {
   phase: 'fetching' | 'classifying' | 'deep-scan' | 'context' | 'building' | 'storing'
   progress: number               // 0–100
   error?: string
+  // Live scan progress fields (populated during scanning)
+  repoUrl?: string
+  repoName?: string
+  totalFiles?: number
+  scannedFiles?: Array<{ path: string; riskLevel: 'HIGH' | 'MEDIUM' | 'LOW' | 'CLEAN' }>
+  currentFile?: string | null
+  issuesFound?: number
 }
 
 // API request/response types
