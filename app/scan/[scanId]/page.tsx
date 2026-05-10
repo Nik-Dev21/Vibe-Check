@@ -9,6 +9,8 @@ import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 import { auth } from '@/lib/auth'
 import { MOCK_SCAN_REPORT } from '@/lib/mock-data'
+import { getScan } from '@/lib/ibm/cloudant'
+import { getReport } from '@/lib/ibm/cos'
 import type { ScanReport, ScanStatus } from '@/lib/types'
 import Navbar from '@/components/layout/navbar'
 import Footer from '@/components/layout/footer'
@@ -24,15 +26,19 @@ interface ScanResultPageProps {
 async function fetchReport(scanId: string): Promise<ScanReport> {
   if (scanId === 'mock') return MOCK_SCAN_REPORT
 
-  // Use ?full=1 to get the full report (COS + Cloudant fallback) in one call
-  const res = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/scan/${scanId}?full=1`, { cache: 'no-store' })
-  if (!res.ok) throw new Error('Scan not found')
-  const data = await res.json() as ScanStatus | ScanReport
-  if ('status' in data && (data as ScanStatus).status !== 'complete') {
-    if ((data as ScanStatus).status === 'error') throw new Error(`Scan failed: ${(data as ScanStatus).error ?? 'unknown'}`)
-    redirect(`/scan/${scanId}/loading`)
+  // Call data layer directly — avoids HTTP round-trip + port mismatch in local dev
+  const doc = await getScan(scanId)
+  if (!doc) throw new Error('Scan not found')
+
+  if ('status' in doc) {
+    const s = doc as ScanStatus
+    if (s.status === 'error') throw new Error(`Scan failed: ${s.error ?? 'unknown'}`)
+    if (s.status !== 'complete') redirect(`/scan/${scanId}/loading`)
   }
-  return data as ScanReport
+
+  // Scan complete — full report from COS has the vulnerabilities array
+  const fullReport = await getReport(scanId)
+  return fullReport ?? (doc as unknown as ScanReport)
 }
 
 export async function generateMetadata({ params }: ScanResultPageProps): Promise<Metadata> {
