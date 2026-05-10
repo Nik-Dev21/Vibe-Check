@@ -17,14 +17,85 @@ import type { RepoFile, FastPassResult, Vulnerability, Severity, VulnCategory } 
 const FEATHERLESS_CONCURRENCY = 1
 
 /**
+ * Patterns to search for when extracting code snippets per vulnerability category.
+ */
+const CATEGORY_PATTERNS: Record<VulnCategory, RegExp[]> = {
+  HARDCODED_SECRET: [
+    /(?:api.?key|secret|password|token|auth|credentials?|private.?key)\s*[:=]\s*.+/i,
+    /(?:sk_live|sk_test|AKIA|ghp_|SG\.|xox[bpas]|whsec_)\w+/i,
+  ],
+  SQL_INJECTION: [
+    /(?:SELECT|INSERT|UPDATE|DELETE|DROP)\s+.*\$\{/i,
+    /(?:query|sql|execute)\s*\(\s*`[^`]*\$\{/i,
+    /(?:query|sql|execute)\s*\(\s*['"][^'"]*['"]\s*\+/i,
+  ],
+  XSS: [
+    /innerHTML\s*=/i,
+    /\bres\.send\s*\([^)]*\$\{/i,
+    /dangerouslySetInnerHTML/i,
+  ],
+  BROKEN_AUTH: [
+    /jwt\.decode\s*\(/i,
+    /verify.*=\s*false/i,
+  ],
+  INSECURE_DEPENDENCY: [
+    /"(?:lodash|minimist|node-fetch|axios|express)":\s*"[^"]+"/i,
+  ],
+  SENSITIVE_DATA_EXPOSURE: [
+    /console\.log\s*\(.*(?:password|card|cvv|ssn|secret|token)/i,
+    /(?:ssn|credit_card|cardNumber|cvv)\b/i,
+  ],
+  SECURITY_MISCONFIGURATION: [
+    /DEBUG\s*=\s*True/i,
+    /Access-Control-Allow-Origin.*\*/i,
+  ],
+  IDOR: [
+    /req\.params\.id/i,
+    /WHERE\s+id\s*=\s*\$\{?req/i,
+  ],
+  SSRF: [
+    /fetch\s*\(\s*(?:req\.body|req\.query|req\.params)/i,
+    /requests\.get\s*\(\s*(?:url|user)/i,
+    /callbackUrl/i,
+  ],
+  PATH_TRAVERSAL: [
+    /path\.join\s*\([^)]*(?:req\.body|req\.query|req\.params|filename)/i,
+    /writeFileSync\s*\([^)]*(?:req\.body|filename)/i,
+  ],
+}
+
+/**
+ * Extract the first matching code snippet from file content for a given category.
+ * Returns up to 3 surrounding lines for context.
+ */
+function extractSnippet(fileContent: string, category: VulnCategory): { snippet: string; lineNumber: number } | null {
+  const lines = fileContent.split('\n')
+  const patterns = CATEGORY_PATTERNS[category]
+
+  for (const pattern of patterns) {
+    for (let i = 0; i < lines.length; i++) {
+      if (pattern.test(lines[i])) {
+        const start = Math.max(0, i - 1)
+        const end = Math.min(lines.length, i + 2)
+        return {
+          snippet: lines.slice(start, end).join('\n'),
+          lineNumber: i + 1,
+        }
+      }
+    }
+  }
+  return null
+}
+
+/**
  * Build a fallback Vulnerability from a fast-pass result when deep scan fails.
- * This ensures users still see findings even if watsonx.ai is unavailable.
+ * Uses pattern matching to extract relevant code snippets from the file.
  */
 function buildFallbackVulnerability(
-  fastPass: FastPassResult
+  fastPass: FastPassResult,
+  fileContent: string
 ): Vulnerability[] {
   if (fastPass.detectedTypes.length === 0) {
-    // Fast-pass flagged it as risky but gave no specific types — create a generic finding
     return [{
       id: `vuln-${uuidv4()}`,
       filePath: fastPass.filePath,
@@ -33,21 +104,26 @@ function buildFallbackVulnerability(
       title: `Potential security issue detected in ${fastPass.filePath.split('/').pop()}`,
       description: `The fast-pass scanner flagged this file as ${fastPass.riskLevel} risk with ${(fastPass.confidence * 100).toFixed(0)}% confidence. Deep analysis was unavailable — review this file manually.`,
       fixSuggestion: 'Review this file for hardcoded secrets, injection vulnerabilities, and insecure patterns.',
+      codeSnippet: fileContent.split('\n').slice(0, 5).join('\n'),
       detectedBy: 'featherless',
     }]
   }
 
-  // Create one vulnerability per detected type
-  return fastPass.detectedTypes.map((category) => ({
-    id: `vuln-${uuidv4()}`,
-    filePath: fastPass.filePath,
-    severity: (fastPass.riskLevel === 'HIGH' ? 'HIGH' : 'MEDIUM') as Severity,
-    category,
-    title: `${formatCategory(category)} detected in ${fastPass.filePath.split('/').pop()}`,
-    description: `Fast-pass scan detected ${formatCategory(category).toLowerCase()} in this file with ${(fastPass.confidence * 100).toFixed(0)}% confidence. Deep analysis was unavailable for detailed line-level findings.`,
-    fixSuggestion: getFallbackFix(category),
-    detectedBy: 'featherless' as const,
-  }))
+  return fastPass.detectedTypes.map((category) => {
+    const match = extractSnippet(fileContent, category)
+    return {
+      id: `vuln-${uuidv4()}`,
+      filePath: fastPass.filePath,
+      lineNumber: match?.lineNumber,
+      severity: (fastPass.riskLevel === 'HIGH' ? 'HIGH' : 'MEDIUM') as Severity,
+      category,
+      title: `${formatCategory(category)} detected in ${fastPass.filePath.split('/').pop()}`,
+      description: `Fast-pass scan detected ${formatCategory(category).toLowerCase()} in this file with ${(fastPass.confidence * 100).toFixed(0)}% confidence. Deep analysis was unavailable for detailed line-level findings.`,
+      fixSuggestion: getFallbackFix(category),
+      codeSnippet: match?.snippet ?? fileContent.split('\n').slice(0, 5).join('\n'),
+      detectedBy: 'featherless' as const,
+    }
+  })
 }
 
 function formatCategory(cat: VulnCategory): string {
@@ -105,7 +181,7 @@ async function scanFileParallel(
 
   // If both failed, fall back to fast-pass findings
   if (vulns.length === 0) {
-    const fallbacks = buildFallbackVulnerability(fastPass)
+    const fallbacks = buildFallbackVulnerability(fastPass, file.content)
     console.log(`[deep-scan] Using ${fallbacks.length} fallback finding(s) for ${file.path}`)
     return fallbacks
   }
@@ -146,7 +222,7 @@ export async function runDeepScan(
       allVulnerabilities.push(...vulns)
     } catch (err) {
       console.warn(`[deep-scan] scanFileParallel failed for ${fp.filePath}: ${err instanceof Error ? err.message : String(err)}`)
-      const fallbacks = buildFallbackVulnerability(fp)
+      const fallbacks = buildFallbackVulnerability(fp, file.content)
       allVulnerabilities.push(...fallbacks)
     }
   }
