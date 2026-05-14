@@ -1,16 +1,13 @@
 /**
  * lib/scanner/index.ts
- * Scan pipeline orchestrator — two-phase architecture:
+ * Scan pipeline orchestrator — single-phase Claude scan.
  *
- * Phase 1 (hot path, blocking):
- *   GitHub fetch → prioritize files → Featherless classify+deep-scan all files
- *   NLU on README runs in parallel. Partial report assembled and stored.
- *   User sees results after this phase (~25s for 20 files).
+ * Pipeline (target wall-clock ~10-15s for 20 files):
+ *   GitHub fetch → prioritize → Claude scan all files in parallel (CONCURRENCY=8)
+ *                → sync README keyword scan → assemble report
  *
- * Phase 2 (background, non-blocking via waitUntil):
- *   Top 5 HIGH-confidence files sent to watsonx.ai at CONCURRENCY=2.
- *   Each completion appends findings to Cloudant. SSE stream picks them up live.
- *   Final status flips to 'complete' when all enrichment finishes.
+ * Optional second-opinion enrichment (background, non-blocking):
+ *   Top HIGH files → Featherless deep-scan, merged into Cloudant as they arrive.
  */
 
 import { v4 as uuidv4 } from 'uuid'
@@ -19,7 +16,7 @@ import { prioritizeFiles } from './file-prioritizer'
 import { runFastPassAndDeepScan } from './fast-pass'
 import { enrichContext, escalateSeverities } from './context-layer'
 import { buildReport } from './report-builder'
-import { deepScanFile as watsonxDeepScan } from '../ibm/watsonx'
+import { deepScanFile as featherlessDeepScan } from '../featherless'
 import { updateScanStatus, appendEnrichedFindings } from '../ibm/cloudant'
 import type { ScanReport, ScanStatus, Vulnerability, FastPassResult } from '../types'
 
@@ -34,8 +31,6 @@ export interface TopHighFile {
   content: string
   confidence: number
 }
-
-// ── Internal helpers ──────────────────────────────────────────────────────────
 
 async function setStatus(
   scanId: string,
@@ -58,12 +53,10 @@ async function setStatus(
   }
 }
 
-// ── Main scan (Featherless only, no watsonx in hot path) ─────────────────────
-
 /**
- * Run the fast VibeCheck scan pipeline (Featherless only).
- * Returns a partial ScanReport and the top HIGH files for background enrichment.
- * onFileComplete fires after each file finishes so SSE can stream findings live.
+ * Run the Claude-based scan pipeline. Returns the full report and the top
+ * HIGH-risk files (the caller may optionally feed these to enrichWithFeatherless
+ * for a free second-opinion via Featherless in the background).
  */
 export async function runScanPipeline(
   repoUrl: string,
@@ -73,10 +66,8 @@ export async function runScanPipeline(
 ): Promise<{ report: ScanReport; topHighFiles: TopHighFile[]; repoFiles: Array<{ path: string; content: string }> }> {
   const startedAt = Date.now()
 
-  // ── Phase 1: Fetch + prioritize ────────────────────────────────────────────
   await setStatus(scanId, repoUrl, 'fetching', 5)
   const rawFiles = await getRepoFiles(repoUrl, githubToken)
-
   if (rawFiles.length === 0) {
     throw new Error(`No scannable files found in ${repoUrl}`)
   }
@@ -84,27 +75,19 @@ export async function runScanPipeline(
   const files = prioritizeFiles(rawFiles)
   const repoName = repoUrl.split('/').filter(Boolean).slice(-1)[0] ?? repoUrl
 
-  await setStatus(scanId, repoUrl, 'classifying', 15, {
+  // Status updates are throttled — we only flush every Nth file to avoid
+  // hammering Cloudant (each putDocument adds 200-500ms latency).
+  const STATUS_THROTTLE_EVERY = 3
+
+  await setStatus(scanId, repoUrl, 'classifying', 10, {
     repoName,
     totalFiles: files.length,
     scannedFiles: [],
     currentFile: files[0]?.path ?? null,
   })
 
-  // ── Phase 2+3: Featherless fast-pass+deep-scan + NLU in parallel ──────────
-  // NLU starts immediately — we race it with a 10s timeout so it never blocks.
-  const nluPromise = enrichContext(rawFiles).catch((err) => {
-    console.warn(`[scanner] NLU failed, using defaults: ${err instanceof Error ? err.message : String(err)}`)
-    return {
-      isPublicFacing: false,
-      hasAuth: false,
-      hasPayments: false,
-      dataClassification: 'INTERNAL' as const,
-    }
-  })
-
   const liveScannedFiles: Array<{ path: string; riskLevel: FastPassResult['riskLevel'] }> = []
-  const liveFindings: import('../types').Vulnerability[] = []
+  const liveFindings: Vulnerability[] = []
   let issuesFound = 0
 
   const { fastPassResults, rawVulnerabilities } = await runFastPassAndDeepScan(
@@ -120,33 +103,25 @@ export async function runScanPipeline(
         findings: event.findings,
       })
 
-      const nextFile = files[liveScannedFiles.length]?.path ?? null
-      void setStatus(scanId, repoUrl, 'deep-scan', 20 + Math.round(event.progress * 60), {
-        repoName,
-        totalFiles: files.length,
-        scannedFiles: [...liveScannedFiles],
-        currentFile: nextFile,
-        issuesFound,
-        partialFindings: [...liveFindings],
-      })
+      const isLast = event.completed === event.total
+      if (isLast || event.completed % STATUS_THROTTLE_EVERY === 0) {
+        const nextFile = files[liveScannedFiles.length]?.path ?? null
+        void setStatus(scanId, repoUrl, 'deep-scan', 15 + Math.round(event.progress * 70), {
+          repoName,
+          totalFiles: files.length,
+          scannedFiles: [...liveScannedFiles],
+          currentFile: nextFile,
+          issuesFound,
+          partialFindings: [...liveFindings],
+        })
+      }
     }
   )
 
-  // ── Phase 3: NLU result (race with 10s timeout) ───────────────────────────
-  await setStatus(scanId, repoUrl, 'context', 82)
-  const nluTimeout = new Promise<typeof nluPromise extends Promise<infer T> ? T : never>(
-    (resolve) => setTimeout(() => resolve({
-      isPublicFacing: false,
-      hasAuth: false,
-      hasPayments: false,
-      dataClassification: 'INTERNAL' as const,
-    }), 10_000)
-  )
-  const contextRisk = await Promise.race([nluPromise, nluTimeout])
-
+  // README keyword scan is synchronous and instant
+  const contextRisk = enrichContext(rawFiles)
   const vulnerabilities = escalateSeverities(rawVulnerabilities, contextRisk)
 
-  // ── Phase 4: Assemble partial report ─────────────────────────────────────
   await setStatus(scanId, repoUrl, 'building', 90)
   const report = buildReport({
     scanId,
@@ -159,7 +134,6 @@ export async function runScanPipeline(
     contextRisk,
   })
 
-  // Extract top 5 HIGH files by confidence for background watsonx enrichment
   const topHighFiles: TopHighFile[] = fastPassResults
     .filter((r) => r.riskLevel === 'HIGH')
     .sort((a, b) => b.confidence - a.confidence)
@@ -176,16 +150,19 @@ export async function runScanPipeline(
   }
 }
 
-// ── Background watsonx enrichment ────────────────────────────────────────────
+// ── Featherless second-opinion (background, non-blocking) ────────────────────
 
-const ENRICH_CONCURRENCY = 2
+// Featherless free tier — 2 concurrent requests is the safe ceiling
+const FEATHERLESS_CONCURRENCY = 2
 
 /**
- * Run watsonx.ai deep-scan on top HIGH files in the background.
- * Called via waitUntil after the partial report is already shown to the user.
- * Appends findings to Cloudant incrementally — SSE stream picks them up live.
+ * Optional second-opinion pass: feed top HIGH files to Featherless and append
+ * any additional findings to Cloudant. Runs in background via waitUntil — the
+ * SSE stream picks up new findings as they land.
+ *
+ * Falls through silently if Featherless is unavailable.
  */
-export async function enrichHighFiles(
+export async function enrichWithFeatherless(
   scanId: string,
   repoUrl: string,
   topHighFiles: TopHighFile[],
@@ -196,7 +173,6 @@ export async function enrichHighFiles(
     return
   }
 
-  // Mark which files are being enriched
   try {
     await updateScanStatus({
       scanId,
@@ -208,30 +184,28 @@ export async function enrichHighFiles(
     } as Parameters<typeof updateScanStatus>[0])
   } catch { /* non-fatal */ }
 
-  // Process in batches of ENRICH_CONCURRENCY
-  for (let i = 0; i < topHighFiles.length; i += ENRICH_CONCURRENCY) {
-    const batch = topHighFiles.slice(i, i + ENRICH_CONCURRENCY)
+  for (let i = 0; i < topHighFiles.length; i += FEATHERLESS_CONCURRENCY) {
+    const batch = topHighFiles.slice(i, i + FEATHERLESS_CONCURRENCY)
     await Promise.allSettled(
       batch.map(async ({ filePath, content }) => {
         try {
-          const rawFindings = await watsonxDeepScan(filePath, content)
+          const rawFindings = await featherlessDeepScan(filePath, content)
           const findings: Vulnerability[] = rawFindings.map((v) => ({
             ...v,
             id: `vuln-${uuidv4()}`,
-            detectedBy: 'watsonx' as const,
+            detectedBy: 'featherless' as const,
           }))
           await appendEnrichedFindings(scanId, filePath, findings)
           onEnrichComplete?.(filePath, findings)
-          console.log(`[enrich] watsonx found ${findings.length} finding(s) in ${filePath}`)
+          console.log(`[enrich] Featherless added ${findings.length} finding(s) for ${filePath}`)
         } catch (err) {
-          console.warn(`[enrich] watsonx failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`)
+          console.warn(`[enrich] Featherless failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`)
           await appendEnrichedFindings(scanId, filePath, []).catch(() => { /* best-effort */ })
         }
       })
     )
   }
 
-  // Flip to complete
   try {
     await updateScanStatus({ scanId, status: 'complete', phase: 'storing', progress: 100, repoUrl })
   } catch (err) {
@@ -239,9 +213,6 @@ export async function enrichHighFiles(
   }
 }
 
-/**
- * Generate a new unique scan ID.
- */
 export function generateScanId(): string {
   return `scan-${uuidv4()}`
 }

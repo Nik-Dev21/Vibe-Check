@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.2",
     "@base-ui/react": "^1.4.1",
     "@ibm-cloud/cloudant": "^0.12.19",
     "@ibm-cloud/watsonx-ai": "^1.7.11",

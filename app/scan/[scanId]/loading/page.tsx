@@ -19,9 +19,9 @@ const PHASE_STEPS: Array<{
   label: string
   detail: string
 }> = [
-  { phase: 'fetching',    label: 'Cloning repository',  detail: 'git clone --depth=1' },
-  { phase: 'classifying', label: 'Indexing files',       detail: 'building file list' },
-  { phase: 'deep-scan',   label: 'Static analysis',      detail: 'Featherless + watsonx' },
+  { phase: 'fetching',    label: 'Cloning repository',  detail: 'tarball fetch' },
+  { phase: 'classifying', label: 'Indexing files',       detail: 'prioritizing by risk' },
+  { phase: 'deep-scan',   label: 'AI security scan',     detail: 'Claude Haiku 4.5' },
   { phase: 'building',    label: 'Generating report',    detail: 'scoring + ranking' },
   { phase: 'done',        label: 'Complete',             detail: 'redirecting…' },
 ]
@@ -414,10 +414,10 @@ export default function ScanLoadingPage() {
       const phaseLines: Record<string, { text: string; color?: string }> = {
         fetching:    { text: '[clone] fetching repo tree…' },
         classifying: { text: `[index] ${totalFiles > 0 ? `${totalFiles} files` : 'indexing…'}` },
-        'deep-scan': { text: '[scan ] Featherless fast-pass + watsonx deep scan', color: 'var(--color-low)' },
+        'deep-scan': { text: '[scan ] Claude Haiku scanning files…', color: 'var(--color-low)' },
         building:    { text: '[score] assembling report + calculating score…', color: 'var(--color-clean)' },
-        storing:     { text: '[store] saving to IBM COS…' },
-        context:     { text: '[nlu  ] Watson NLU context enrichment…' },
+        storing:     { text: '[store] saving report…' },
+        context:     { text: '[ctx  ] README context analysis…' },
       }
       const entry = phaseLines[pollStatus.phase]
       if (entry) terminalLines.current = [...terminalLines.current, entry]
@@ -532,7 +532,7 @@ export default function ScanLoadingPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span className="uppercase-label">ETA</span>
           <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--color-text-primary)' }}>
-            {scanDone ? '0s' : `~${Math.max(0, 60 - Math.round(elapsed / 1000))}s`}
+            {scanDone ? '0s' : `~${Math.max(0, 20 - Math.round(elapsed / 1000))}s`}
           </span>
           <a
             href="/"

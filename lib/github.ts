@@ -87,56 +87,70 @@ function getOctokit(token?: string): Octokit {
 // ── Exported functions ────────────────────────────────────────────────────────
 
 /**
- * Fetch all scannable files from a public GitHub repo.
- * Downloads file contents inline. Skips files > 500 KB.
+ * Fetch all scannable files from a GitHub repo by downloading the tarball.
+ * One HTTP round-trip pulls the whole repo, then we filter+extract in-memory.
+ * Order-of-magnitude faster than fetching files one-by-one via the contents API.
  */
 export async function getRepoFiles(repoUrl: string, token?: string): Promise<RepoFile[]> {
   const octokit = getOctokit(token)
   const { owner, repo } = parseRepoUrl(repoUrl)
 
-  // Get the default branch SHA
-  const repoInfo = await octokit.rest.repos.get({ owner, repo })
-  const defaultBranch = repoInfo.data.default_branch
-
-  const branchInfo = await octokit.rest.repos.getBranch({
-    owner, repo, branch: defaultBranch,
-  })
-  const treeSha = branchInfo.data.commit.commit.tree.sha
-
-  // Fetch full recursive tree
-  const treeRes = await octokit.rest.git.getTree({
-    owner, repo, tree_sha: treeSha, recursive: 'true',
+  // Single API call returns the full repo as a gzipped tarball
+  const tarRes = await octokit.rest.repos.downloadTarballArchive({
+    owner, repo, ref: '',
   })
 
-  const scannableItems = treeRes.data.tree.filter(
-    (item) =>
-      item.type === 'blob' &&
-      item.path != null &&
-      isScannable(item.path) &&
-      (item.size ?? 0) <= MAX_FILE_SIZE_BYTES
-  )
+  // Octokit returns the raw bytes — type is loosely "unknown", coerce to ArrayBuffer
+  const buffer = Buffer.from(tarRes.data as ArrayBuffer)
+  return extractScannableFromTarball(buffer)
+}
 
-  // Download all files concurrently (batched to avoid rate limits)
-  const BATCH = 20
+/**
+ * Walk a gzipped tar archive and pull out scannable text files.
+ * Pure Node — uses zlib.gunzipSync + a tiny tar parser; no external deps.
+ */
+function extractScannableFromTarball(gzipped: Buffer): RepoFile[] {
+  // Lazy-import to keep startup cheap
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const zlib = require('zlib') as typeof import('zlib')
+  const tarball = zlib.gunzipSync(gzipped)
+
   const files: RepoFile[] = []
+  let offset = 0
 
-  for (let i = 0; i < scannableItems.length; i += BATCH) {
-    const batch = scannableItems.slice(i, i + BATCH)
-    const results = await Promise.allSettled(
-      batch.map(async (item) => {
-        const content = await getFileContent(repoUrl, item.path!, token)
-        return {
-          path: item.path!,
-          content,
-          size: item.size ?? 0,
-          language: getLanguage(item.path!),
-        } satisfies RepoFile
-      })
-    )
-    for (const r of results) {
-      if (r.status === 'fulfilled') files.push(r.value)
-      // Silently skip files that fail to download
-    }
+  while (offset + 512 <= tarball.length) {
+    const header = tarball.subarray(offset, offset + 512)
+    // End-of-archive sentinel: a fully-zero header block
+    if (header[0] === 0) break
+
+    // Tar fields: name(100) mode(8) uid(8) gid(8) size(12 octal) mtime(12) chksum(8) type(1) link(100) magic(8) ...
+    const nameRaw = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '')
+    const prefixRaw = header.subarray(345, 500).toString('utf8').replace(/\0.*$/, '')
+    const fullName = prefixRaw ? `${prefixRaw}/${nameRaw}` : nameRaw
+
+    const sizeStr = header.subarray(124, 136).toString('utf8').replace(/[\0 ]+$/, '')
+    const size = parseInt(sizeStr, 8) || 0
+    const typeFlag = header[156] === 0 ? '0' : String.fromCharCode(header[156])
+
+    const dataStart = offset + 512
+    const dataEnd = dataStart + size
+    // tar pads each entry to a 512-byte boundary
+    const blocks = Math.ceil(size / 512)
+    offset = dataStart + blocks * 512
+
+    // Skip non-regular files (directories, symlinks, etc.)
+    if (typeFlag !== '0' && typeFlag !== '\0') continue
+    if (size === 0) continue
+    if (size > MAX_FILE_SIZE_BYTES) continue
+
+    // Strip the github archive's top-level dir (e.g. "owner-repo-abc123/foo.ts" → "foo.ts")
+    const slashIdx = fullName.indexOf('/')
+    if (slashIdx === -1) continue
+    const path = fullName.slice(slashIdx + 1)
+    if (!path || !isScannable(path)) continue
+
+    const content = tarball.subarray(dataStart, dataEnd).toString('utf8')
+    files.push({ path, content, size, language: getLanguage(path) })
   }
 
   return files

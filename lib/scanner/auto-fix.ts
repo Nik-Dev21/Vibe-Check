@@ -6,7 +6,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import { generateAutoFix } from '../featherless'
+import { generateAutoFix } from '../claude'
 import type { Vulnerability, AutoFix } from '../types'
 
 /**

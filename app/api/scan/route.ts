@@ -1,19 +1,19 @@
 /**
  * POST /api/scan
- * Accepts a GitHub repo URL, runs the Featherless fast-pass scan pipeline,
- * stores the partial report, then kicks off watsonx enrichment via waitUntil.
+ * Accepts a GitHub repo URL, runs the Claude scan pipeline, stores the report,
+ * then optionally kicks off a Featherless second-opinion pass via waitUntil.
  * Returns { scanId, status: 'queued' } immediately.
  *
  * Timeline:
  *   ~0s   → response returned, client navigates to /loading
- *   ~25s  → partial report stored, user sees results via SSE stream
- *   ~50s  → watsonx enrichment completes in background, SSE emits scan_complete
+ *   ~10s  → report stored, user sees results via SSE stream
+ *   ~25s  → Featherless second-opinion completes (optional), SSE emits scan_complete
  */
 
 import { waitUntil } from '@vercel/functions'
 import { z } from 'zod'
 import { auth } from '@/lib/auth'
-import { runScanPipeline, enrichHighFiles, generateScanId } from '@/lib/scanner/index'
+import { runScanPipeline, enrichWithFeatherless, generateScanId } from '@/lib/scanner/index'
 import { saveReport } from '@/lib/ibm/cos'
 import { saveScanSummary, updateScanStatus } from '@/lib/ibm/cloudant'
 import type { ScanResponse } from '@/lib/types'
@@ -59,7 +59,7 @@ export async function POST(request: Request): Promise<Response> {
 
   async function runPipeline() {
     try {
-      // Phase 1–4: Featherless-only fast scan
+      // Phase 1–4: Claude-driven scan
       const { report, topHighFiles } = await runScanPipeline(repoUrl, scanId, githubToken)
 
       // Store partial report — user sees this via SSE partial_complete
@@ -78,11 +78,13 @@ export async function POST(request: Request): Promise<Response> {
         enrichingFiles: topHighFiles.map((f) => f.filePath),
       } as Parameters<typeof updateScanStatus>[0])
 
-      // Phase 5: watsonx enrichment in background — keeps function alive on Vercel
-      if (topHighFiles.length > 0) {
-        waitUntil(enrichHighFiles(scanId, repoUrl, topHighFiles))
+      // Optional Featherless second-opinion in background — adds more findings
+      // for HIGH-risk files. Skipped (and scan marked complete immediately) if
+      // there are no HIGH files or Featherless is not configured.
+      const featherlessOn = !!process.env.FEATHERLESS_API_KEY
+      if (featherlessOn && topHighFiles.length > 0) {
+        waitUntil(enrichWithFeatherless(scanId, repoUrl, topHighFiles))
       } else {
-        // Nothing to enrich — mark complete immediately
         await updateScanStatus({ scanId, status: 'complete', phase: 'storing', progress: 100, repoUrl })
       }
     } catch (err) {

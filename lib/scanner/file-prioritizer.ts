@@ -26,6 +26,10 @@ const SKIP_DIR_PREFIXES = [
 
 const MAX_FILE_BYTES = 100_000
 
+// Cap scan at this many top-priority files. Most security signal lives in the
+// top-30; scanning more burns budget+wall-clock for diminishing returns.
+const MAX_FILES_TO_SCAN = 30
+
 const HIGH_RISK_NAME_PATTERN = /secret|key|token|password|credential|apikey|api_key/i
 
 const CONFIG_EXTENSIONS = new Set(['.json', '.yaml', '.yml', '.toml', '.ini', '.env'])
@@ -92,5 +96,10 @@ export function prioritizeFiles(files: RepoFile[]): RepoFile[] {
     console.log(`[prioritizer] Skipped ${skipped} files (too large / excluded dirs), ${scannable.length} remain`)
   }
 
-  return [...scannable].sort((a, b) => priorityScore(b) - priorityScore(a))
+  const sorted = [...scannable].sort((a, b) => priorityScore(b) - priorityScore(a))
+  if (sorted.length > MAX_FILES_TO_SCAN) {
+    console.log(`[prioritizer] Capping scan at top ${MAX_FILES_TO_SCAN} files (had ${sorted.length})`)
+    return sorted.slice(0, MAX_FILES_TO_SCAN)
+  }
+  return sorted
 }
