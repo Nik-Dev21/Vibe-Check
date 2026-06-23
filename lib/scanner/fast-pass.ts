@@ -77,12 +77,28 @@ async function processFile(file: RepoFile): Promise<{ fastPass: FastPassResult; 
       fastPass.riskLevel = 'MEDIUM'
     }
 
+    let finalVulns = vulnerabilities
+
     // If Claude said HIGH but produced no vulns, fall back to a placeholder
-    if (vulnerabilities.length === 0 && (fastPass.riskLevel === 'HIGH' || fastPass.riskLevel === 'MEDIUM')) {
-      return { fastPass, vulns: buildFallbackVulnerability(fastPass) }
+    if (finalVulns.length === 0 && (fastPass.riskLevel === 'HIGH' || fastPass.riskLevel === 'MEDIUM')) {
+      finalVulns = buildFallbackVulnerability(fastPass)
+      console.log(`[deep-scan] Using ${finalVulns.length} fallback finding(s) for ${file.path}`)
     }
 
-    return { fastPass, vulns: vulnerabilities }
+    // Backfill missing code snippets using file content + line numbers
+    const lines = file.content.split('\n')
+    for (const v of finalVulns) {
+      if (!v.codeSnippet && v.lineNumber) {
+        const start = Math.max(0, v.lineNumber - 2)
+        const end = Math.min(lines.length, v.lineNumber + 1)
+        v.codeSnippet = lines.slice(start, end).join('\n')
+      } else if (!v.codeSnippet) {
+        // No line number either — use first few lines as fallback
+        v.codeSnippet = lines.slice(0, 5).join('\n')
+      }
+    }
+
+    return { fastPass, vulns: finalVulns }
   } catch (err) {
     console.warn(`[scan] Claude failed for ${file.path}: ${err instanceof Error ? err.message : String(err)}`)
     return {
